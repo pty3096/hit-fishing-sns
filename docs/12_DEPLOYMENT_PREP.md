@@ -61,7 +61,7 @@ docker compose --env-file .env.production -f deploy/compose.yaml exec app npm ru
 
 ## 검증 상태
 
-- 로컬 자동 테스트 17개 통과 (프로필 사진 포함)
+- 로컬 자동 테스트 21개 통과 (프로필 사진·검색·화면 상태 포함)
 - 기존 데이터 백업 후 스키마 5로 업그레이드, 기존 자료 보존
 - 브라우저에서 개발 메일 인증과 재설정 안내·입력 화면 확인
 - 이 PC에는 Docker가 없어 로컬 컨테이너 빌드·실행은 미검증

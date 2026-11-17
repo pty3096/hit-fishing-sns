@@ -267,3 +267,15 @@ test('withdrawal requires password and confirmation, cascades data and prevents 
   const c=await request(app,'POST','/api/signup',credentials('withdraw-c@example.test'));assert.ok(c.body.user.id>a.body.user.id);
   const pc=(await request(app,'POST','/api/posts',post,c.cookie)).body.post;assert.ok(pc.id>pa.id);
 });
+
+test('search accepts partial region and fish names while treating SQL wildcards as literal text',async t=>{
+  const app=createApp({database:':memory:'});t.after(app.close);
+  const a=await request(app,'POST','/api/signup',credentials('search@example.test'));
+  await request(app,'POST','/api/posts',post,a.cookie);
+  await request(app,'POST','/api/posts',{...post,region:'경남 거제시',fish:'감성돔'},a.cookie);
+  await request(app,'POST','/api/posts',{...post,region:'100%_지점\\테스트',fish:'송어'},a.cookie);
+  for(const region of ['강릉','거제','%','_','\\'])assert.equal((await request(app,'GET','/api/posts?region='+encodeURIComponent(region))).body.posts.length,1);
+  assert.equal((await request(app,'GET','/api/posts?fish='+encodeURIComponent(' 농 '))).body.posts.length,1);
+  assert.equal((await request(app,'GET','/api/posts?fish='+encodeURIComponent('농')+'&region='+encodeURIComponent('거제'))).body.posts.length,0);
+  assert.equal((await request(app,'GET','/api/posts?region='+encodeURIComponent("' OR 1=1 --"))).body.posts.length,0);
+});

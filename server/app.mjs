@@ -69,7 +69,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       if(path==='/api/meta'&&method==='GET')return send(200,{development_mail:!!mail.localMailbox,verification_required:requireVerified,production});
       if (!path.startsWith('/api/')) {
         if (method !== 'GET') fail(405, '지원하지 않는 요청입니다.');
-        const file = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] }[path];
+        const file = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/ui.mjs': ['ui.mjs','text/javascript'], '/style.css': ['style.css', 'text/css'] }[path];
         if (!file) fail(404, '페이지가 없습니다.');
         res.setHeader('Content-Type', `${file[1]}; charset=utf-8`);
         res.end(readFileSync(resolve(root, 'public', file[0]))); return;
@@ -226,7 +226,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if (url.searchParams.get('mine') === '1') { auth(); clauses.push('p.user_id=?'); values.push(user.id); }
         if (url.searchParams.get('following') === '1') { auth(); clauses.push('p.user_id IN (SELECT target_id FROM follows WHERE follower_id=?)'); values.push(user.id); }
         const author = Number(url.searchParams.get('author')); if (author > 0) { clauses.push('p.user_id=?'); values.push(author); }
-        for (const field of ['fish', 'region']) { const v = url.searchParams.get(field); if (v) { clauses.push(`p.${field}=?`); values.push(v.slice(0, 80)); } }
+        for (const field of ['fish', 'region']) { const v = url.searchParams.get(field)?.trim(); if (v) { clauses.push(`p.${field} LIKE ? ESCAPE '\\'`); values.push('%'+v.slice(0,80).replace(/[\\%_]/g,'\\$&')+'%'); } }
         const before = Number(url.searchParams.get('before'));
         if (before > 0) { clauses.push('p.id<?'); values.push(before); }
         const rows = db.prepare(select + (clauses.length ? ' WHERE ' + clauses.join(' AND ') : '') + ' ORDER BY p.id DESC LIMIT 21').all(...values);

@@ -13,6 +13,7 @@ Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 
 
 ## 자료
 
+- [모바일·PC 사용성 점검 및 수정](docs/14_USABILITY_QA.md)
 - [프로필 사진 업로드·변경·삭제](docs/13_PROFILE_PHOTO.md)
 - [이메일 인증·비밀번호 재설정](docs/11_EMAIL_AUTH.md)
 - [배포 준비·백업·검증 상태](docs/12_DEPLOYMENT_PREP.md)

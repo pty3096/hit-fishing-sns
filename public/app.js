@@ -1,3 +1,4 @@
+import {parseRoute,searchPath,navigationSection,canWrite,emptyMessage,galleryPosition} from './ui.mjs';
 const main = document.querySelector('#main');
 let meta = {development_mail:false,verification_required:true,production:false};
 let me = null, returnTo = 'profile', generation = 0;
@@ -6,42 +7,53 @@ const cleanupPreviews = () => { previewUrls.forEach(url => URL.revokeObjectURL(u
 const fileBase64 = file => new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = () => reject(new Error('사진을 읽을 수 없습니다.')); reader.readAsDataURL(file); });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 async function api(path, method = 'GET', data) {
-  const response = await fetch('/api' + path, { method, headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined });
-  const result = await response.json();
+  let response;try{response=await fetch('/api' + path, { method, headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined });}catch{throw new Error('연결이 끊겼습니다. 인터넷 연결을 확인하고 다시 시도해주세요.');}
+  let result;try{result=await response.json();}catch{throw new Error('서버 응답을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.');}
   if (!response.ok) throw new Error(result.error || '요청을 처리하지 못했습니다.');
   return result;
 }
-function toast(message) { const t = document.querySelector('#toast'); t.textContent = message; t.hidden = false; setTimeout(() => { t.hidden = true; }, 3500); }
+let toastTimer;
+function toast(message) { clearTimeout(toastTimer);const t = document.querySelector('#toast'); t.textContent = message; t.hidden = false; toastTimer=setTimeout(() => { t.hidden = true; }, 4500); }
 function guard(route) { if (me) return true; returnTo = route; location.hash = 'login'; return false; }
+function guardWrite(route) {
+  if(!guard(route))return false;
+  if(!canWrite(me,meta)){toast(me.suspended?'이용이 제한된 계정입니다. 설정을 확인해주세요.':'이메일 인증 후 이용할 수 있어요.');location.hash='settings';return false;}
+  return true;
+}
 function formAction(id, action) {
-  const form = document.getElementById(id);
+  const form = document.getElementById(id);if(!form)return;
+  const formRoute=location.hash;
   form.onsubmit = async event => {
     event.preventDefault(); const button = form.querySelector('button[type=submit]');
-    const error = form.querySelector('[role=alert]'); error.textContent = ''; error.hidden = true; button.disabled = true;
-    try { await action(Object.fromEntries(new FormData(form))); }
-    catch (err) { error.textContent = err.message; error.hidden = false; }
-    finally { button.disabled = false; }
+    const error = form.querySelector('[role=alert]'); error.textContent = ''; error.hidden = true; button.disabled = true;const originalLabel=button.textContent;button.textContent='처리 중…';form.setAttribute('aria-busy','true');
+    try { await action(Object.fromEntries(new FormData(form)),()=>form.isConnected&&location.hash===formRoute); }
+    catch (err) { if(form.isConnected&&location.hash===formRoute){error.textContent=err.message;error.hidden=false;error.tabIndex=-1;error.focus();} }
+    finally {button.disabled=false;button.textContent=originalLabel;form.removeAttribute('aria-busy');}
   };
 }
 const typeLabel=type=>({post:'게시물',comment:'댓글',user:'사용자'}[type]||type);
 const actionLabel=action=>({dismiss:'신고 종결',hide:'콘텐츠 숨김',restore:'콘텐츠 복원',suspend:'이용 제한',unsuspend:'이용 제한 해제'}[action]||action);
 const formError = '<p class="error" role="alert" hidden></p>';
-const photoGallery = p => p.photos?.length ? `<div class="gallery">${p.photos.map((photo,i) => `<figure><img src="${esc(photo.url)}" alt="${esc(p.title)} 조황 사진 ${i+1}" loading="lazy"><figcaption>${i+1} / ${p.photos.length}</figcaption></figure>`).join('')}</div>` : '';
+const photoGallery = p => p.photos?.length ? `<section class="gallery" aria-label="조황 사진"><div class="gallery-track" tabindex="0" aria-label="조황 사진 목록. 좌우 방향키로 이동">${p.photos.map((photo,i) => `<figure><img src="${esc(photo.url)}" alt="${esc(p.title)} 조황 사진 ${i+1}" loading="lazy"></figure>`).join('')}</div><div class="gallery-controls">${p.photos.length>1?'<button type="button" data-gallery="-1" aria-label="이전 사진" disabled>←</button>':''}<span class="gallery-position" aria-live="polite">1 / ${p.photos.length}</span>${p.photos.length>1?'<button type="button" data-gallery="1" aria-label="다음 사진">→</button>':''}</div></section>` : '';
+
 const avatar=person=>`<div class="avatar">${person.avatar_url?`<img src="${esc(person.avatar_url)}" alt="${esc(person.nickname)} 프로필 사진" loading="lazy">`:'🎣'}</div>`;
 const likeButton = p => `<button data-like="${p.id}" data-liked="${p.liked}" aria-pressed="${p.liked}" class="${p.liked ? 'liked' : ''}">${p.liked ? '♥' : '♡'} 좋아요 ${p.likes}</button>`;
 function card(p) { return `<article class="card"><div class="author">${avatar(p)}<div><a href="#user/${p.user_id}"><strong>${esc(p.nickname)}</strong></a><div class="muted">${esc(p.region)} · ${esc(p.fishing_date)}</div></div></div><a href="#post/${p.id}">${p.photos?.[0] ? `<img class="feed-photo" src="${esc(p.photos[0].url)}" alt="${esc(p.title)} 조황 사진" loading="lazy">` : ''}<h2 class="post-title">${esc(p.title)}</h2><p class="content">${esc(p.body.slice(0, 100))}${p.body.length > 100 ? '…' : ''}</p></a><p><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><div class="actions">${likeButton(p)}<a href="#post/${p.id}">댓글 ${p.comment_count}</a></div></article>`; }
-function showList(target, result, morePath) {
-  const list = document.querySelector(target); list.innerHTML = result.posts.map(card).join('') || '<section class="card empty">아직 조황이 없어요.<p class="muted">첫 기록을 남기거나 검색 조건을 바꿔보세요.</p><a href="#write">조황 남기기 →</a></section>';
+function showList(target,result,morePath,kind='home',append=false) {
+  const list=document.querySelector(target);if(!list)return;
+  const empty=emptyMessage(kind);
+  list.innerHTML=result.posts.map(card).join('')||(append?'<p class="muted">더 이상 조황이 없습니다.</p>':`<section class="card empty"><h2>${esc(empty.title)}</h2><p class="muted">${esc(empty.body)}</p><a class="primary" href="${empty.href}">${esc(empty.label)}</a></section>`);
   if (!result.next) return;
   const more = document.createElement('button'); more.textContent = '조황 더 보기'; list.append(more);
   more.onclick = async () => {
     more.disabled = true;
-    try { const next = await api(morePath + (morePath.includes('?') ? '&' : '?') + 'before=' + result.next); const container = document.createElement('div'); container.id = 'page-' + result.next; more.replaceWith(container); showList('#' + container.id, next, morePath); }
+    try { const next = await api(morePath + (morePath.includes('?') ? '&' : '?') + 'before=' + result.next); const container = document.createElement('div'); container.id = 'page-' + result.next; more.replaceWith(container); showList('#' + container.id,next,morePath,kind,true); }
     catch (e) { toast(e.message); more.disabled = false; }
   };
 }
-async function render() {
-  const current = ++generation, route = location.hash.slice(1) || 'home';
+async function render({focus=false}={}) {
+  const current=++generation;const {route,params}=parseRoute(location.hash);
+  main.setAttribute('aria-busy','true');
   cleanupPreviews();
   main.innerHTML = '<section class="card" role="status">기록을 불러오고 있어요…</section>';
   try {
@@ -51,28 +63,28 @@ async function render() {
     document.querySelector('.notice').textContent=meta.production?'히트 HIT · 낚시의 순간을 함께':'개발 버전 · 이 PC에 기록을 저장합니다 · 메일 발송 연결 전 로컬 검증';
     const authStatus=document.querySelector('#auth-status');authStatus.hidden=!me||me.email_verified||!meta.verification_required;authStatus.innerHTML='이메일 인증을 완료하면 글 작성과 소통 기능을 이용할 수 있어요. <a href="#settings">인증 안내 →</a>';
     const account = document.querySelector('#account'); account.textContent = me ? `${me.nickname} →` : '로그인 →'; account.href = me ? '#profile' : '#login';
-    document.querySelectorAll('.navlink,.bottom a').forEach(a => a.classList.toggle('active', a.hash === '#' + route));
+    document.querySelectorAll('.navlink,.bottom a').forEach(a=>{const section=navigationSection(route);const target=a.classList.contains('navlink')&&route==='settings'?'settings':section;const active=a.hash==='#'+target;a.classList.toggle('active',active);if(active)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
     if (['home','following','search'].includes(route)) {
-      if (route === 'following' && !guard(route)) return;
-      const listPath = route === 'following' ? '/posts?following=1' : '/posts';
+      if (route === 'following' && !guardWrite(route)) return;
+      const listPath=route==='following'?'/posts?following=1':route==='search'?searchPath(params):'/posts';
       const result = await api(listPath); if (current !== generation) return;
-      main.innerHTML = route !== 'search' ? `<section class="card hero"><div class="eyebrow">YOUR NEXT HIT</div><h1>오늘, 어디서<br>한 수 하셨나요?</h1><p>나만의 낚시 기록을 차곡차곡 남겨요.</p><a class="primary" href="#write">＋ 조황 남기기</a></section><div class="tabs"><a class="filter-tab" href="#home" aria-current="${route === 'home' ? 'page' : 'false'}">전체</a><a class="filter-tab" href="#following" aria-current="${route === 'following' ? 'page' : 'false'}">팔로잉</a></div><h2>${route === 'following' ? '팔로잉 조황' : '최근 조황'}</h2><div id="posts"></div>` : `<div class="eyebrow">DISCOVER</div><h1>조황 찾아보기</h1><form id="search" class="card form"><label for="fish">어종</label><input id="fish" name="fish" maxlength="30" placeholder="예: 농어"><label for="region">지역</label><input id="region" name="region" maxlength="50" placeholder="예: 강원 강릉시"><p class="field-help">입력한 어종과 지역이 정확히 일치하는 기록을 찾습니다.</p>${formError}<button class="primary" type="submit">검색</button><button id="reset-search" type="button">전체 보기</button></form><div id="posts"></div>`;
-      showList('#posts', result, listPath);
+      main.innerHTML = route !== 'search' ? `<section class="card hero"><div class="eyebrow">YOUR NEXT HIT</div><h1>오늘, 어디서<br>한 수 하셨나요?</h1><p>나만의 낚시 기록을 차곡차곡 남겨요.</p><a class="primary" href="#write">＋ 조황 남기기</a></section><div class="tabs"><a class="filter-tab" href="#home" aria-current="${route === 'home' ? 'page' : 'false'}">전체</a><a class="filter-tab" href="#following" aria-current="${route === 'following' ? 'page' : 'false'}">팔로잉</a></div><h2>${route === 'following' ? '팔로잉 조황' : '최근 조황'}</h2><div id="posts"></div>` : `<div class="eyebrow">DISCOVER</div><h1>조황 찾아보기</h1><form id="search" class="card form"><label for="fish">어종</label><input id="fish" name="fish" maxlength="30" value="${esc(params.get('fish'))}" placeholder="예: 농어"><label for="region">지역</label><input id="region" name="region" maxlength="50" value="${esc(params.get('region'))}" placeholder="예: 강릉, 거제"><p class="field-help">지역의 일부만 입력해도 찾아드려요. 예: 강릉, 거제</p>${formError}<button class="primary" type="submit">검색</button><button id="reset-search" type="button">전체 보기</button></form><div id="posts"></div>`;
+      showList('#posts',result,listPath,route==='search'?'search':route==='following'?'following':'home');
       if (route === 'search') {
-        formAction('search', async data => { const path = '/posts?' + new URLSearchParams({ fish: data.fish.trim(), region: data.region.trim() }); const result = await api(path); if (current === generation) showList('#posts', result, path); });
-        document.querySelector('#reset-search').onclick = () => render();
+        formAction('search',async data=>{const path=searchPath(new URLSearchParams(data));const hash='#search'+(path.includes('?')?path.slice(path.indexOf('?')):'');if(location.hash===hash)await render({focus:true});else location.hash=hash;});
+        document.querySelector('#reset-search').onclick=()=>{if(location.hash==='#search')render();else location.hash='search';};
       }
     } else if (route === 'login' || route === 'signup') {
       const signup = route === 'signup';
       main.innerHTML = `<section class="card"><span class="eyebrow">WELCOME TO HIT</span><h1>${signup ? '첫 기록을 시작해요.' : '다시 만나 반가워요.'}</h1><p class="muted">${meta.development_mail?'개발용 메일함에서 인증·재설정 안내를 확인할 수 있습니다.':'가입한 이메일로 인증·재설정 안내를 보내드립니다.'}</p><form id="auth" class="form">${signup ? '<label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="30" autocomplete="nickname" required>' : ''}<label for="email">이메일</label><input id="email" name="email" type="email" maxlength="254" autocomplete="username" required><label for="password">비밀번호 (12~128자)</label><input id="password" name="password" type="password" minlength="12" maxlength="128" autocomplete="${signup ? 'new-password' : 'current-password'}" required>${formError}<button class="primary" type="submit">${signup ? '회원가입' : '로그인'}</button></form><p><a href="#${signup ? 'login' : 'signup'}">${signup ? '이미 계정이 있어요 →' : '처음이신가요? 회원가입 →'}</a></p>${!signup?'<p><a href="#forgot">비밀번호를 잊으셨나요? →</a></p>':''}</section>`;
-      formAction('auth', async data => { me = (await api(signup ? '/signup' : '/login', 'POST', data)).user; location.hash = me.suspended||!me.email_verified ? 'settings' : returnTo; toast(signup ? '가입했습니다. 첫 조황을 남겨보세요.' : '로그인했습니다.'); });
+      formAction('auth',async(data,stillHere)=>{ me = (await api(signup ? '/signup' : '/login', 'POST', data)).user; if(stillHere())location.hash=me.suspended||!me.email_verified?'settings':returnTo;else render(); toast(signup ? '가입했습니다. 첫 조황을 남겨보세요.' : '로그인했습니다.'); });
     } else if (route === 'forgot') {
       main.innerHTML=`<a href="#login" class="back">← 로그인</a><h1>비밀번호 찾기</h1><form id="forgot-form" class="card form"><p>가입한 이메일을 입력해주세요.</p><label for="email">이메일</label><input id="email" name="email" type="email" maxlength="254" autocomplete="email" required>${formError}<button type="submit" class="primary">재설정 안내 받기</button></form>`;
-      formAction('forgot-form',async data=>{const result=await api('/password/forgot','POST',data);main.innerHTML=`<section class="card"><h1>메일함을 확인해주세요.</h1><p>${esc(result.message)}</p>${meta.development_mail?`<p class="muted">로컬 검증에서는 로그인한 계정의 <a href="#mailbox">개발용 메일함</a> 또는 이 PC의 메일함 확인 명령을 사용합니다.</p>`:''}<a href="#login">로그인으로 →</a></section>`;});
+      formAction('forgot-form',async(data,stillHere)=>{const result=await api('/password/forgot','POST',data);if(!stillHere()){toast('재설정 요청을 접수했습니다.');return;}main.innerHTML=`<section class="card"><h1>메일함을 확인해주세요.</h1><p>${esc(result.message)}</p>${meta.development_mail?`<p class="muted">로컬 검증에서는 로그인한 계정의 <a href="#mailbox">개발용 메일함</a> 또는 이 PC의 메일함 확인 명령을 사용합니다.</p>`:''}<a href="#login">로그인으로 →</a></section>`;});
     } else if (/^verify\/[a-f0-9]{64}$/.test(route)) {
       const token=route.split('/')[1];
       main.innerHTML=`<h1>이메일 인증</h1><form id="verify-form" class="card form"><p>아래 버튼을 누르면 이메일 인증이 완료됩니다.</p>${formError}<button type="submit" class="primary">이메일 인증 완료하기</button></form>`;
-      formAction('verify-form',async()=>{await api('/email/verify','POST',{token});history.replaceState(null,'',me?'#settings':'#login');toast('이메일 인증을 완료했습니다.');render();});
+      formAction('verify-form',async(_,stillHere)=>{await api('/email/verify','POST',{token});if(!stillHere()){toast('이메일 인증을 완료했습니다.');return;}history.replaceState(null,'',me?'#settings':'#login');toast('이메일 인증을 완료했습니다.');render();});
     } else if (/^reset\/[a-f0-9]{64}$/.test(route)) {
       const token=route.split('/')[1];
       main.innerHTML=`<h1>새 비밀번호 설정</h1><form id="reset-form" class="card form"><p>변경하면 모든 기기의 기존 로그인이 종료됩니다.</p><label for="password">새 비밀번호 (12~128자)</label><input id="password" name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><label for="password-confirm">새 비밀번호 확인</label><input id="password-confirm" name="confirm" type="password" minlength="12" maxlength="128" autocomplete="new-password" required>${formError}<button type="submit" class="primary">비밀번호 변경</button></form>`;
@@ -84,7 +96,7 @@ async function render() {
       main.innerHTML=`<a href="#settings" class="back">← 설정</a><h1>개발용 메일함</h1><p class="muted">실제 이메일 발송 없이 본인 계정의 링크를 확인하는 화면입니다.</p><button id="refresh-mail">새로 확인</button><div>${data.messages.map(m=>`<article class="card"><h2>${esc(m.subject)}</h2><p class="muted">유효 시간: ${esc(new Date(m.expires).toLocaleString('ko-KR'))}까지</p><a class="primary" href="${esc(m.link)}">안내 열기 →</a></article>`).join('')||'<section class="card">아직 안내가 없거나 이미 사용한 링크입니다. 설정에서 새 인증 안내를 요청할 수 있습니다.</section>'}</div>`;
       document.querySelector('#refresh-mail').onclick=render;
     } else if (route === 'write' || /^edit\/\d+$/.test(route)) {
-      if (!guard(route)) return;
+      if (!guardWrite(route)) return;
       const id = route.startsWith('edit/') ? route.split('/')[1] : null;
       const p = id ? (await api('/posts/' + id)).post : {};
       if (current !== generation) return;
@@ -110,20 +122,20 @@ async function render() {
         } else for (const file of files) { const url = URL.createObjectURL(file); previewUrls.push(url); selectedPhotos.push({file,url}); }
         event.target.value = ''; previews();
       };
-      formAction('post-form', async data => {
+      formAction('post-form',async(data,stillHere)=>{
         if (!selectedPhotos.length && (!id || originalCount)) throw new Error('사진을 한 장 이상 남겨주세요.');
         if (selectedPhotos.length) {
           const submit = document.querySelector('#post-form button[type=submit]'); submit.textContent = '사진을 저장하는 중…';
           try { data.photos = await Promise.all(selectedPhotos.map(async photo => photo.id ? {id:photo.id} : {data:await fileBase64(photo.file)})); }
           finally { submit.textContent = id ? '수정 저장' : '조황 등록'; }
         }
-        const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); location.hash = 'post/' + post.id; toast('조황을 저장했습니다.'); });
+        const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); if(stillHere())location.hash='post/'+post.id;toast('조황을 저장했습니다.'); });
     } else if (/^post\/\d+$/.test(route)) {
       const { post: p } = await api('/posts/' + route.split('/')[1]); if (current !== generation) return;
-      main.innerHTML = `<a class="back" href="#home">← 피드로</a><article class="card"><div class="eyebrow">FISHING JOURNAL</div><h1>${esc(p.title)}</h1><p class="muted"><a href="#user/${p.user_id}">${esc(p.nickname)}</a> · ${esc(p.fishing_date)}</p>${photoGallery(p)}<p><span class="tag">${esc(p.region)}</span><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><p class="content">${esc(p.body)}</p>${me?.id === p.user_id ? `<div class="actions"><a href="#edit/${p.id}">수정</a><button id="delete-post">삭제</button></div><div id="confirm-delete" hidden><p>이 조황을 삭제할까요? 삭제 후 복구할 수 없습니다.</p><button id="delete-yes">삭제하기</button><button id="delete-no">취소</button><p class="error" role="alert" hidden></p></div>` : ''}</article><section class="card"><div class="actions">${likeButton(p)}<a href="#user/${p.user_id}">작성자 프로필 →</a>${me?.id!==p.user_id ? `<a href="#report/post/${p.id}">게시물 신고</a>` : ''}</div></section><section class="card"><h2>이야기를 나눠요</h2><form id="comment-form" class="form"><label for="comment">댓글</label><textarea id="comment" name="body" maxlength="300" required placeholder="따뜻한 한마디를 남겨주세요"></textarea>${formError}<button class="primary" type="submit">댓글 등록</button></form><div id="comments"></div></section>`;
+      main.innerHTML = `<a class="back" href="#home">← 피드로</a><article class="card"><div class="eyebrow">FISHING JOURNAL</div><h1>${esc(p.title)}</h1><p class="muted"><a href="#user/${p.user_id}">${esc(p.nickname)}</a> · ${esc(p.fishing_date)}</p>${photoGallery(p)}<p><span class="tag">${esc(p.region)}</span><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><p class="content">${esc(p.body)}</p>${me?.id === p.user_id ? `<div class="actions"><a href="#edit/${p.id}">수정</a><button id="delete-post">삭제</button></div><div id="confirm-delete" hidden><p>이 조황을 삭제할까요? 삭제 후 복구할 수 없습니다.</p><button id="delete-yes">삭제하기</button><button id="delete-no">취소</button><p class="error" role="alert" hidden></p></div>` : ''}</article><section class="card"><div class="actions">${likeButton(p)}<a href="#user/${p.user_id}">작성자 프로필 →</a>${me?.id!==p.user_id ? `<a href="#report/post/${p.id}">게시물 신고</a>` : ''}</div></section><section class="card"><h2>이야기를 나눠요</h2>${canWrite(me,meta)?`<form id="comment-form" class="form"><label for="comment">댓글</label><textarea id="comment" name="body" maxlength="300" required placeholder="따뜻한 한마디를 남겨주세요"></textarea>${formError}<button class="primary" type="submit">댓글 등록</button></form>`:`<p class="muted">${!me?'로그인하고 이야기를 나눠보세요.':me.suspended?'이용 제한 상태에서는 댓글을 남길 수 없습니다.':'이메일 인증 후 댓글을 남길 수 있어요.'}</p><a class="primary" href="${me?'#settings':'#login'}" data-login-return="${esc(route)}">${me?'계정 설정 확인':'로그인하기 →'}</a>`}<div id="comments"></div></section>`;
       await loadComments(p.id);
       if (current !== generation) return;
-      formAction('comment-form', async data => { if (!guard(route)) return; await api('/posts/' + p.id + '/comments','POST',data); document.querySelector('#comment').value=''; await loadComments(p.id); toast('댓글을 남겼습니다.'); });
+      formAction('comment-form',async(data,stillHere)=>{ if (!guardWrite(route)) return; await api('/posts/' + p.id + '/comments','POST',data); if(stillHere()){const field=document.querySelector('#comment');if(field)field.value='';await loadComments(p.id);} toast('댓글을 남겼습니다.'); });
       if (me?.id === p.user_id) {
         const panel = document.querySelector('#confirm-delete');
         document.querySelector('#delete-post').onclick = () => { panel.hidden = false; };
@@ -137,11 +149,11 @@ async function render() {
       const result = await api('/posts?author=' + userId); if (current !== generation) return;
       const mine = me?.id === userId;
       main.innerHTML = `<section class="card"><div class="profile">${avatar(person)}<div><span class="eyebrow">FISHING JOURNAL</span><h1>${esc(person.nickname)}</h1><p class="content">${esc(person.bio || '나만의 낚시 이야기를 남겨보세요.')}</p></div></div><div class="stats"><a href="#user/${userId}/followers"><strong>${person.followers}</strong>팔로워</a><a href="#user/${userId}/following"><strong>${person.following}</strong>팔로잉</a></div>${mine ? '<a href="#profile-edit">프로필 편집 →</a> · <a href="#settings">설정</a><button id="logout">로그아웃</button>' : `<button id="follow" aria-pressed="${person.followed}">${person.followed ? '팔로잉 취소' : '＋ 팔로우'}</button><div class="actions"><a href="#report/user/${userId}">사용자 신고</a><button id="block">사용자 차단</button></div><div id="block-confirm" hidden><p>서로의 글·댓글이 숨겨지고 팔로우 관계가 해제됩니다.</p><button id="block-yes">차단하기</button><button id="block-no">취소</button></div>`}</section><h2>${mine ? '내 조황 기록' : '조황 기록'}</h2><div id="posts"></div>`;
-      showList('#posts', result, '/posts?author=' + userId);
+      showList('#posts',result,'/posts?author='+userId,mine?'mine':'author');
       if (mine) document.querySelector('#logout').onclick = async () => { try { await api('/logout', 'POST', {}); me = null; location.hash = 'home'; toast('로그아웃했습니다.'); } catch (e) { toast(e.message); } };
-      else document.querySelector('#follow').onclick = async event => { if (!guard(route)) return; event.target.disabled=true; try { await api('/users/'+userId+'/follow', person.followed ? 'DELETE' : 'PUT', {}); render(); } catch (e) { toast(e.message); event.target.disabled=false; } };
+      else document.querySelector('#follow').onclick = async event => { if (!guardWrite(route)) return; event.target.disabled=true; try { await api('/users/'+userId+'/follow', person.followed ? 'DELETE' : 'PUT', {}); render(); } catch (e) { toast(e.message); event.target.disabled=false; } };
       if (!mine) {
-        document.querySelector('#block').onclick=()=>{if(guard(route))document.querySelector('#block-confirm').hidden=false;};
+        document.querySelector('#block').onclick=()=>{if(guardWrite(route))document.querySelector('#block-confirm').hidden=false;};
         document.querySelector('#block-no').onclick=()=>document.querySelector('#block-confirm').hidden=true;
         document.querySelector('#block-yes').onclick=async event=>{event.target.disabled=true;try{await api('/blocks/'+userId,'PUT',{});location.hash='settings';toast('차단했습니다. 설정에서 해제할 수 있습니다.');}catch(e){toast(e.message);event.target.disabled=false;}};
       }
@@ -152,10 +164,10 @@ async function render() {
       main.innerHTML = `<a class="back" href="#user/${userId}">← ${esc(person.nickname)} 프로필</a><h1>${kind === 'followers' ? '팔로워' : '팔로잉'}</h1><section class="card" id="people"></section>`;
       await loadPeople(userId,kind);
     } else if (/^report\/(post|comment|user)\/\d+$/.test(route)) {
-      if(!guard(route))return;
+      if(!guardWrite(route))return;
       const [,type,id]=route.split('/');
       main.innerHTML=`<a class="back" href="#home">← 홈으로</a><h1>신고하기</h1><form id="report-form" class="card form"><p>접수된 신고는 운영자가 검토합니다.</p><label for="reason">신고 사유</label><textarea id="reason" name="reason" maxlength="300" required placeholder="문제가 되는 내용을 설명해주세요"></textarea>${formError}<button class="primary" type="submit">신고 접수</button></form>`;
-      formAction('report-form',async data=>{await api('/reports','POST',{...data,target_type:type,target_id:Number(id)}); main.innerHTML='<section class="card"><h1>신고를 접수했습니다.</h1><p>운영자가 확인하겠습니다.</p><a href="#home">홈으로 →</a></section>';});
+      formAction('report-form',async(data,stillHere)=>{await api('/reports','POST',{...data,target_type:type,target_id:Number(id)});if(!stillHere()){toast('신고를 접수했습니다.');return;}main.innerHTML='<section class="card"><h1>신고를 접수했습니다.</h1><p>운영자가 확인하겠습니다.</p><a href="#home">홈으로 →</a></section>';});
     } else if (route === 'settings') {
       if(!guard(route))return;
       main.innerHTML=`<h1>내 계정 설정</h1><section class="card"><h2>이메일 인증</h2><p>${me.email_verified?'인증을 완료했습니다.':'이메일 인증이 필요합니다.'}</p>${!me.email_verified?'<button id="resend-email">인증 안내 다시 받기</button>':''}${meta.development_mail?'<p><a href="#mailbox">개발용 메일함 열기 →</a></p>':''}<p><a href="#forgot">비밀번호 재설정 안내 받기 →</a></p></section><section class="card">${me.suspended?'<p class="error">이용이 제한된 계정입니다. 글 작성과 소통 기능을 사용할 수 없습니다. 탈퇴는 가능합니다.</p>':''}<p><a href="#profile">내 프로필 →</a></p>${me.is_admin?'<p><a href="#admin">운영자 신고 관리 →</a></p>':''}<h2>차단한 사용자</h2><div id="blocked-users"></div></section><section class="card"><h2>회원 탈퇴</h2><p>계정, 조황·사진, 댓글, 좋아요, 팔로우·차단 관계와 모든 로그인 세션을 삭제합니다. 접수된 신고·운영 기록은 일부 익명화하여 남습니다.</p><p>이 작업은 되돌릴 수 없습니다. 개발 백업 파일은 별도로 관리됩니다.</p><form id="withdraw" class="form"><label for="withdraw-password">현재 비밀번호</label><input id="withdraw-password" type="password" name="password" autocomplete="current-password" required maxlength="128"><label for="withdraw-confirm">확인을 위해 탈퇴를 입력해주세요</label><input id="withdraw-confirm" name="confirm" required autocomplete="off" pattern="탈퇴">${formError}<button type="submit" class="danger-button">계정과 작성 자료 삭제</button></form></section>`;
@@ -179,7 +191,7 @@ async function render() {
       main.innerHTML=`<a class="back" href="#admin">← 신고 목록</a><h1>신고 #${r.id}</h1><section class="card"><p><strong>${esc(typeLabel(r.target_type))} #${r.target_id} · ${r.status==='open'?'미처리':'처리 완료'}</strong></p><h2>신고 사유</h2><p class="content">${esc(r.reason)}</p><h2>대상 내용</h2>${item?`${item.avatar_url?avatar(item):''}<p>${esc(item.nickname)}</p><p class="content">${esc(item.title||item.body||item.bio||'소개 없음')}</p>${item.title?`<p class="content">${esc(item.body)}</p>${photoGallery(item)}`:''}<p class="muted">${item.hidden?'숨김 상태':''}${item.suspended?' 이용 제한 상태':''}</p>`:'<p>대상이 삭제되었습니다. 종결만 가능합니다.</p>'}</section><form id="resolve-report" class="card form"><label for="action">조치</label><select name="action" id="action"><option value="dismiss">신고 종결 (콘텐츠 변경 없음)</option>${item?`${r.target_type!=='user'?'<option value="hide">콘텐츠 숨김</option><option value="restore">콘텐츠 복원</option>':''}<option value="suspend">작성자 이용 제한</option><option value="unsuspend">작성자 이용 제한 해제</option>`:''}</select><label for="note">조치 사유 (기록에 보존)</label><textarea name="note" id="note" required maxlength="500"></textarea>${formError}<button type="submit" class="primary">조치 적용</button></form><section class="card"><h2>조치 기록</h2>${data.actions.map(a=>`<article class="comment"><strong>${esc(actionLabel(a.action))}</strong><p class="content">${esc(a.note)}</p><p class="muted">${esc(new Date(a.created_at).toLocaleString('ko-KR'))}</p></article>`).join('')||'<p>아직 조치 기록이 없습니다.</p>'}</section>`;
       formAction('resolve-report',async body=>{await api('/admin/reports/'+id+'/resolve','POST',body);toast('조치를 기록했습니다.');render();});
     } else if (route === 'profile-edit') {
-      if (!guard(route)) return;
+      if (!guardWrite(route)) return;
       main.innerHTML = `<h1>나를 소개해요</h1><section class="card"><h2>프로필 사진</h2><div class="profile-avatar-preview" id="avatar-preview">${avatar(me)}</div><form id="avatar-form" class="form"><label for="avatar-file">사진 선택</label><input id="avatar-file" type="file" accept="image/jpeg,image/png,image/webp" required><p class="field-help">JPG·PNG·WebP 1장, 최대 10MB. 가운데를 정사각형으로 맞추고 위치 정보는 제거합니다.</p>${formError}<button class="primary" type="submit">사진 저장</button></form><button id="remove-avatar" type="button" ${!me.avatar_url?'disabled':''}>기본 이미지로 변경</button></section><form id="profile" class="card form"><label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="30" value="${esc(me.nickname)}" required><label for="bio">소개</label><textarea id="bio" name="bio" maxlength="200">${esc(me.bio)}</textarea>${formError}<button class="primary" type="submit">프로필 저장</button></form>`;
       let selectedAvatar=null;
       document.querySelector('#avatar-file').onchange=event=>{
@@ -188,15 +200,15 @@ async function render() {
         if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>10*1024*1024){toast('JPG·PNG·WebP 사진을 10MB 이하로 선택해주세요.');event.target.value='';selectedAvatar=null;document.querySelector('#avatar-preview').innerHTML=avatar(me);return;}
         selectedAvatar=file;const url=URL.createObjectURL(file);previewUrls.push(url);document.querySelector('#avatar-preview').innerHTML=avatar({nickname:me.nickname,avatar_url:url});
       };
-      formAction('avatar-form',async()=>{if(!selectedAvatar)throw new Error('사진을 선택해주세요.');const picker=document.querySelector('#avatar-file'),remove=document.querySelector('#remove-avatar');picker.disabled=true;remove.disabled=true;try{const r=await api('/profile/photo','PUT',{photo:{data:await fileBase64(selectedAvatar)}});me=r.user;toast('프로필 사진을 저장했습니다.');render();}finally{picker.disabled=false;remove.disabled=!me.avatar_url;}});
+      formAction('avatar-form',async(_,stillHere)=>{if(!selectedAvatar)throw new Error('사진을 선택해주세요.');const picker=document.querySelector('#avatar-file'),remove=document.querySelector('#remove-avatar');picker.disabled=true;remove.disabled=true;try{const r=await api('/profile/photo','PUT',{photo:{data:await fileBase64(selectedAvatar)}});if(stillHere()){me=r.user;render();}toast('프로필 사진을 저장했습니다.');}finally{picker.disabled=false;remove.disabled=!me?.avatar_url;}});
       document.querySelector('#remove-avatar').onclick=async event=>{event.target.disabled=true;try{me=(await api('/profile/photo','DELETE',{})).user;toast('기본 이미지로 변경했습니다.');render();}catch(e){toast(e.message);event.target.disabled=false;}};
-      formAction('profile', async data => { me = (await api('/profile', 'PATCH', data)).user; location.hash = 'profile'; toast('프로필을 저장했습니다.'); });
+      formAction('profile',async(data,stillHere)=>{const result=await api('/profile','PATCH',data);if(stillHere()){me=result.user;location.hash='profile';}toast('프로필을 저장했습니다.');});
     } else throw new Error('없는 화면입니다. 홈으로 이동해주세요.');
   } catch (e) {
     if (current !== generation) return;
     main.innerHTML = `<section class="card"><h2>잠시 확인이 필요해요</h2><p class="error" role="alert">${esc(e.message)}</p><button id="retry">다시 시도</button> <a href="#home">홈으로</a></section>`;
-    document.querySelector('#retry').onclick = render;
-  }
+    document.querySelector('#retry').onclick=()=>render({focus:true});
+  }finally{if(current===generation){main.removeAttribute('aria-busy');if(focus)main.focus({preventScroll:true});}}
 }
 async function loadComments(postId, before, target = '#comments') {
   const routeAtStart=location.hash;
@@ -205,7 +217,7 @@ async function loadComments(postId, before, target = '#comments') {
   container.innerHTML = result.comments.map(c => `<article class="comment"><div class="author">${avatar(c)}<a href="#user/${c.user_id}"><strong>${esc(c.nickname)}</strong></a></div><p class="content">${esc(c.body)}</p>${me?.id!==c.user_id ? `<a href="#report/comment/${c.id}">댓글 신고</a>` : ''}${me?.id===c.user_id ? `<button data-delete-comment="${c.id}" data-post="${postId}">내 댓글 삭제</button>` : ''}</article>`).join('') || (before ? '' : '<p class="muted">첫 댓글을 남겨보세요.</p>');
   if (result.next) {
     const more = document.createElement('button'); more.textContent='이전 댓글 더 보기'; container.append(more);
-    more.onclick = async () => { more.disabled=true; try { const next = document.createElement('div'); next.id='comments-page-'+result.next; more.replaceWith(next); await loadComments(postId,result.next,'#'+next.id); } catch(e) { toast(e.message); await loadComments(postId); } };
+    more.onclick = async () => { more.disabled=true; try { const next = document.createElement('div'); next.id='comments-page-'+result.next; more.before(next);try{await loadComments(postId,result.next,'#'+next.id);more.remove();}catch(e){next.remove();throw e;} } catch(e){toast(e.message);more.disabled=false;} };
   }
 }
 async function loadPeople(userId,kind,before,target='#people') {
@@ -213,19 +225,19 @@ async function loadPeople(userId,kind,before,target='#people') {
   const result = await api('/users/'+userId+'/'+kind+(before ? '?before='+before : ''));
   const container = document.querySelector(target); if (!container || routeAtStart!==location.hash) return;
   container.innerHTML=result.users.map(u=>`<article class="comment"><div class="author">${avatar(u)}<a href="#user/${u.id}"><strong>${esc(u.nickname)}</strong></a></div><p class="content">${esc(u.bio)}</p></article>`).join('') || '<p class="muted">아직 목록이 비어있어요.</p>';
-  if (result.next) { const more=document.createElement('button'); more.textContent='더 보기'; container.append(more); more.onclick=async()=>{ more.disabled=true; try { const next=document.createElement('div'); next.id='people-page-'+result.next; more.replaceWith(next); await loadPeople(userId,kind,result.next,'#'+next.id); } catch(e) {toast(e.message);} }; }
+  if (result.next) { const more=document.createElement('button'); more.textContent='더 보기'; container.append(more); more.onclick=async()=>{ more.disabled=true; try { const next=document.createElement('div'); next.id='people-page-'+result.next; more.before(next);try{await loadPeople(userId,kind,result.next,'#'+next.id);more.remove();}catch(e){next.remove();throw e;} } catch(e){toast(e.message);more.disabled=false;} }; }
 }
 async function loadBlocked(before,target='#blocked-users') {
   const at=location.hash, result=await api('/blocks'+(before?'?before='+before:''));
   const container=document.querySelector(target);if(!container||at!==location.hash)return;
   container.innerHTML=result.users.map(u=>`<div class="row comment"><strong>${esc(u.nickname)}</strong><button data-unblock="${u.id}">차단 해제</button></div>`).join('')||'<p class="muted">차단한 사용자가 없습니다.</p>';
-  if(result.next){const more=document.createElement('button');more.textContent='더 보기';container.append(more);more.onclick=async()=>{more.disabled=true;try{const next=document.createElement('div');next.id='blocked-'+result.next;more.replaceWith(next);await loadBlocked(result.next,'#'+next.id);}catch(e){toast(e.message);}};}
+  if(result.next){const more=document.createElement('button');more.textContent='더 보기';container.append(more);more.onclick=async()=>{more.disabled=true;try{const next=document.createElement('div');next.id='blocked-'+result.next;more.before(next);try{await loadBlocked(result.next,'#'+next.id);more.remove();}catch(e){next.remove();throw e;}}catch(e){toast(e.message);more.disabled=false;}};}
 }
 async function loadReports(status,before,target='#reports') {
   const at=location.hash,result=await api('/admin/reports?status='+status+(before?'&before='+before:''));
   const container=document.querySelector(target);if(!container||at!==location.hash)return;
   container.innerHTML=result.reports.map(r=>`<article class="comment"><a href="#admin/report/${r.id}"><strong>신고 #${r.id} · ${esc(typeLabel(r.target_type))} #${r.target_id}</strong></a><p class="content">${esc(r.reason)}</p></article>`).join('')||'<p class="muted">해당 신고가 없습니다.</p>';
-  if(result.next){const more=document.createElement('button');more.textContent='더 보기';container.append(more);more.onclick=async()=>{more.disabled=true;try{const next=document.createElement('div');next.id='reports-'+result.next;more.replaceWith(next);await loadReports(status,result.next,'#'+next.id);}catch(e){toast(e.message);}};}
+  if(result.next){const more=document.createElement('button');more.textContent='더 보기';container.append(more);more.onclick=async()=>{more.disabled=true;try{const next=document.createElement('div');next.id='reports-'+result.next;more.before(next);try{await loadReports(status,result.next,'#'+next.id);more.remove();}catch(e){next.remove();throw e;}}catch(e){toast(e.message);more.disabled=false;}};}
 }
 main.addEventListener('click',async event=>{
   const button=event.target.closest('[data-unblock]');if(!button)return;
@@ -233,7 +245,7 @@ main.addEventListener('click',async event=>{
 });
 main.addEventListener('click',async event => {
   const button = event.target.closest('[data-like],[data-delete-comment]'); if (!button) return;
-  if (!guard(location.hash.slice(1)||'home')) return;
+  if (!guardWrite(location.hash.slice(1)||'home')) return;
   button.disabled=true;
   try {
     if (button.dataset.like) {
@@ -242,5 +254,15 @@ main.addEventListener('click',async event => {
     } else { await api('/comments/'+button.dataset.deleteComment,'DELETE',{}); await loadComments(button.dataset.post); toast('댓글을 삭제했습니다.'); }
   } catch(e) {toast(e.message);} finally {button.disabled=false;}
 });
-addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
+function updateGallery(track){
+  const gallery=track.closest('.gallery'),count=track.children.length,index=galleryPosition(track.scrollLeft,track.clientWidth,count);
+  gallery.querySelector('.gallery-position').textContent=`${index+1} / ${count}`;
+  gallery.querySelectorAll('[data-gallery]').forEach(button=>button.disabled=Number(button.dataset.gallery)<0?index===0:index>=count-1);
+}
+function moveGallery(track,direction){track.scrollBy({left:track.clientWidth*direction,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});}
+main.addEventListener('click',event=>{const button=event.target.closest('[data-gallery]');if(button)moveGallery(button.closest('.gallery').querySelector('.gallery-track'),Number(button.dataset.gallery));const link=event.target.closest('[data-login-return]');if(link)returnTo=link.dataset.loginReturn;});
+main.addEventListener('scroll',event=>{if(event.target.classList?.contains('gallery-track'))updateGallery(event.target);},true);
+main.addEventListener('keydown',event=>{if(event.target.classList?.contains('gallery-track')&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();moveGallery(event.target,event.key==='ArrowLeft'?-1:1);}});
+document.querySelector('#skip-link').onclick=event=>{event.preventDefault();main.focus();};
+addEventListener('hashchange',()=>{render({focus:true});window.scrollTo(0,0);});
 render();
