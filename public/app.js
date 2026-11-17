@@ -1,5 +1,8 @@
 const main = document.querySelector('#main');
 let me = null, returnTo = 'profile', generation = 0;
+let previewUrls = [];
+const cleanupPreviews = () => { previewUrls.forEach(url => URL.revokeObjectURL(url)); previewUrls = []; };
+const fileBase64 = file => new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = () => reject(new Error('사진을 읽을 수 없습니다.')); reader.readAsDataURL(file); });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 async function api(path, method = 'GET', data) {
   const response = await fetch('/api' + path, { method, headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined });
@@ -20,7 +23,9 @@ function formAction(id, action) {
   };
 }
 const formError = '<p class="error" role="alert" hidden></p>';
-function card(p) { return `<article class="card"><div class="author"><div class="avatar">🎣</div><div><strong>${esc(p.nickname)}</strong><div class="muted">${esc(p.region)} · ${esc(p.fishing_date)}</div></div></div><a href="#post/${p.id}"><h2 class="post-title">${esc(p.title)}</h2><p class="content">${esc(p.body.slice(0, 100))}${p.body.length > 100 ? '…' : ''}</p></a><p><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p></article>`; }
+const photoGallery = p => p.photos?.length ? `<div class="gallery">${p.photos.map((photo,i) => `<figure><img src="${esc(photo.url)}" alt="${esc(p.title)} 조황 사진 ${i+1}" loading="lazy"><figcaption>${i+1} / ${p.photos.length}</figcaption></figure>`).join('')}</div>` : '';
+const likeButton = p => `<button data-like="${p.id}" data-liked="${p.liked}" aria-pressed="${p.liked}" class="${p.liked ? 'liked' : ''}">${p.liked ? '♥' : '♡'} 좋아요 ${p.likes}</button>`;
+function card(p) { return `<article class="card"><div class="author"><div class="avatar">🎣</div><div><a href="#user/${p.user_id}"><strong>${esc(p.nickname)}</strong></a><div class="muted">${esc(p.region)} · ${esc(p.fishing_date)}</div></div></div><a href="#post/${p.id}">${p.photos?.[0] ? `<img class="feed-photo" src="${esc(p.photos[0].url)}" alt="${esc(p.title)} 조황 사진" loading="lazy">` : ''}<h2 class="post-title">${esc(p.title)}</h2><p class="content">${esc(p.body.slice(0, 100))}${p.body.length > 100 ? '…' : ''}</p></a><p><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><div class="actions">${likeButton(p)}<a href="#post/${p.id}">댓글 ${p.comment_count}</a></div></article>`; }
 function showList(target, result, morePath) {
   const list = document.querySelector(target); list.innerHTML = result.posts.map(card).join('') || '<section class="card empty">아직 조황이 없어요.<p class="muted">첫 기록을 남기거나 검색 조건을 바꿔보세요.</p><a href="#write">조황 남기기 →</a></section>';
   if (!result.next) return;
@@ -33,16 +38,19 @@ function showList(target, result, morePath) {
 }
 async function render() {
   const current = ++generation, route = location.hash.slice(1) || 'home';
+  cleanupPreviews();
   main.innerHTML = '<section class="card" role="status">기록을 불러오고 있어요…</section>';
   try {
     me = (await api('/me')).user;
     if (current !== generation) return;
     const account = document.querySelector('#account'); account.textContent = me ? `${me.nickname} →` : '로그인 →'; account.href = me ? '#profile' : '#login';
     document.querySelectorAll('.navlink,.bottom a').forEach(a => a.classList.toggle('active', a.hash === '#' + route));
-    if (route === 'home' || route === 'search') {
-      const result = await api('/posts'); if (current !== generation) return;
-      main.innerHTML = route === 'home' ? `<section class="card hero"><div class="eyebrow">YOUR NEXT HIT</div><h1>오늘, 어디서<br>한 수 하셨나요?</h1><p>나만의 낚시 기록을 차곡차곡 남겨요.</p><a class="primary" href="#write">＋ 조황 남기기</a></section><h2>최근 조황</h2><div id="posts"></div>` : `<div class="eyebrow">DISCOVER</div><h1>조황 찾아보기</h1><form id="search" class="card form"><label for="fish">어종</label><input id="fish" name="fish" maxlength="30" placeholder="예: 농어"><label for="region">지역</label><input id="region" name="region" maxlength="50" placeholder="예: 강원 강릉시"><p class="field-help">입력한 어종과 지역이 정확히 일치하는 기록을 찾습니다.</p>${formError}<button class="primary" type="submit">검색</button><button id="reset-search" type="button">전체 보기</button></form><div id="posts"></div>`;
-      showList('#posts', result, '/posts');
+    if (['home','following','search'].includes(route)) {
+      if (route === 'following' && !guard(route)) return;
+      const listPath = route === 'following' ? '/posts?following=1' : '/posts';
+      const result = await api(listPath); if (current !== generation) return;
+      main.innerHTML = route !== 'search' ? `<section class="card hero"><div class="eyebrow">YOUR NEXT HIT</div><h1>오늘, 어디서<br>한 수 하셨나요?</h1><p>나만의 낚시 기록을 차곡차곡 남겨요.</p><a class="primary" href="#write">＋ 조황 남기기</a></section><div class="tabs"><a class="filter-tab" href="#home" aria-current="${route === 'home' ? 'page' : 'false'}">전체</a><a class="filter-tab" href="#following" aria-current="${route === 'following' ? 'page' : 'false'}">팔로잉</a></div><h2>${route === 'following' ? '팔로잉 조황' : '최근 조황'}</h2><div id="posts"></div>` : `<div class="eyebrow">DISCOVER</div><h1>조황 찾아보기</h1><form id="search" class="card form"><label for="fish">어종</label><input id="fish" name="fish" maxlength="30" placeholder="예: 농어"><label for="region">지역</label><input id="region" name="region" maxlength="50" placeholder="예: 강원 강릉시"><p class="field-help">입력한 어종과 지역이 정확히 일치하는 기록을 찾습니다.</p>${formError}<button class="primary" type="submit">검색</button><button id="reset-search" type="button">전체 보기</button></form><div id="posts"></div>`;
+      showList('#posts', result, listPath);
       if (route === 'search') {
         formAction('search', async data => { const path = '/posts?' + new URLSearchParams({ fish: data.fish.trim(), region: data.region.trim() }); const result = await api(path); if (current === generation) showList('#posts', result, path); });
         document.querySelector('#reset-search').onclick = () => render();
@@ -57,23 +65,63 @@ async function render() {
       const p = id ? (await api('/posts/' + id)).post : {};
       if (current !== generation) return;
       if (id && p.user_id !== me.id) throw new Error('본인의 게시물만 수정할 수 있습니다.');
-      main.innerHTML = `<a class="back" href="#home">← 피드로</a><h1>${id ? '조황 수정하기' : '오늘의 조황 남기기'}</h1><section class="card"><p class="muted">먼저 글로 기록을 남겨요. 사진 업로드는 다음 단계에 연결합니다.</p><form id="post-form" class="form">${[['title', '제목', 60], ['fish', '어종', 30], ['region', '지역 (시·군·구)', 50], ['method', '낚시 방식', 30]].map(([name, label, max]) => `<label for="${name}">${label}</label><input id="${name}" name="${name}" value="${esc(p[name])}" maxlength="${max}" required>`).join('')}<label for="fishing_date">출조일</label><input id="fishing_date" name="fishing_date" type="date" value="${esc(p.fishing_date)}" required><label for="body">이야기</label><textarea id="body" name="body" maxlength="2000" required>${esc(p.body)}</textarea>${formError}<button class="primary" type="submit">${id ? '수정 저장' : '조황 등록'}</button></form></section>`;
-      formAction('post-form', async data => { const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); location.hash = 'post/' + post.id; toast('조황을 저장했습니다.'); });
+      main.innerHTML = `<a class="back" href="#home">← 피드로</a><h1>${id ? '조황 수정하기' : '오늘의 조황 남기기'}</h1><section class="card"><p class="muted">사진과 함께 오늘의 한 수를 기록해요. 사진의 위치 정보는 저장 시 제거됩니다.</p><form id="post-form" class="form"><label for="photos">조황 사진 (최대 5장, 장당 10MB)</label><input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple><p class="field-help">JPG·PNG·WebP · 사진을 선택한 뒤 개별 삭제할 수 있습니다.</p><div id="photo-preview" class="photo-preview"></div>${[['title', '제목', 60], ['fish', '어종', 30], ['region', '지역 (시·군·구)', 50], ['method', '낚시 방식', 30]].map(([name, label, max]) => `<label for="${name}">${label}</label><input id="${name}" name="${name}" value="${esc(p[name])}" maxlength="${max}" required>`).join('')}<label for="fishing_date">출조일</label><input id="fishing_date" name="fishing_date" type="date" value="${esc(p.fishing_date)}" required><label for="body">이야기</label><textarea id="body" name="body" maxlength="2000" required>${esc(p.body)}</textarea>${formError}<button class="primary" type="submit">${id ? '수정 저장' : '조황 등록'}</button></form></section>`;
+      let selectedPhotos = (p.photos || []).map(photo => ({ id:photo.id, url:photo.url }));
+      const originalCount = selectedPhotos.length;
+      const previews = () => {
+        const container = document.querySelector('#photo-preview'); container.replaceChildren();
+        selectedPhotos.forEach((photo,index) => {
+          const item = document.createElement('div'), img = document.createElement('img'), remove = document.createElement('button');
+          img.src = photo.url; img.alt = '선택한 조황 사진 ' + (index+1);
+          remove.type = 'button'; remove.textContent = '사진 ' + (index+1) + ' 삭제';
+          remove.onclick = () => { selectedPhotos.splice(index,1); previews(); };
+          item.append(img,remove); container.append(item);
+        });
+      };
+      previews();
+      document.querySelector('#photos').onchange = event => {
+        const files = [...event.target.files];
+        if (selectedPhotos.length + files.length > 5 || files.some(file => !['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 10*1024*1024)) {
+          toast('JPG·PNG·WebP, 장당 10MB 이하로 최대 5장까지 선택해주세요.');
+        } else for (const file of files) { const url = URL.createObjectURL(file); previewUrls.push(url); selectedPhotos.push({file,url}); }
+        event.target.value = ''; previews();
+      };
+      formAction('post-form', async data => {
+        if (!selectedPhotos.length && (!id || originalCount)) throw new Error('사진을 한 장 이상 남겨주세요.');
+        if (selectedPhotos.length) {
+          const submit = document.querySelector('#post-form button[type=submit]'); submit.textContent = '사진을 저장하는 중…';
+          try { data.photos = await Promise.all(selectedPhotos.map(async photo => photo.id ? {id:photo.id} : {data:await fileBase64(photo.file)})); }
+          finally { submit.textContent = id ? '수정 저장' : '조황 등록'; }
+        }
+        const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); location.hash = 'post/' + post.id; toast('조황을 저장했습니다.'); });
     } else if (/^post\/\d+$/.test(route)) {
       const { post: p } = await api('/posts/' + route.split('/')[1]); if (current !== generation) return;
-      main.innerHTML = `<a class="back" href="#home">← 피드로</a><article class="card"><div class="eyebrow">FISHING JOURNAL</div><h1>${esc(p.title)}</h1><p class="muted">${esc(p.nickname)} · ${esc(p.fishing_date)}</p><p><span class="tag">${esc(p.region)}</span><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><p class="content">${esc(p.body)}</p>${me?.id === p.user_id ? `<div class="actions"><a href="#edit/${p.id}">수정</a><button id="delete-post">삭제</button></div><div id="confirm-delete" hidden><p>이 조황을 삭제할까요? 삭제 후 복구할 수 없습니다.</p><button id="delete-yes">삭제하기</button><button id="delete-no">취소</button><p class="error" role="alert" hidden></p></div>` : ''}</article><p class="muted">댓글·좋아요·팔로우는 다음 단계에 추가됩니다.</p>`;
+      main.innerHTML = `<a class="back" href="#home">← 피드로</a><article class="card"><div class="eyebrow">FISHING JOURNAL</div><h1>${esc(p.title)}</h1><p class="muted"><a href="#user/${p.user_id}">${esc(p.nickname)}</a> · ${esc(p.fishing_date)}</p>${photoGallery(p)}<p><span class="tag">${esc(p.region)}</span><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><p class="content">${esc(p.body)}</p>${me?.id === p.user_id ? `<div class="actions"><a href="#edit/${p.id}">수정</a><button id="delete-post">삭제</button></div><div id="confirm-delete" hidden><p>이 조황을 삭제할까요? 삭제 후 복구할 수 없습니다.</p><button id="delete-yes">삭제하기</button><button id="delete-no">취소</button><p class="error" role="alert" hidden></p></div>` : ''}</article><section class="card"><div class="actions">${likeButton(p)}<a href="#user/${p.user_id}">작성자 프로필 →</a></div></section><section class="card"><h2>이야기를 나눠요</h2><form id="comment-form" class="form"><label for="comment">댓글</label><textarea id="comment" name="body" maxlength="300" required placeholder="따뜻한 한마디를 남겨주세요"></textarea>${formError}<button class="primary" type="submit">댓글 등록</button></form><div id="comments"></div></section>`;
+      await loadComments(p.id);
+      if (current !== generation) return;
+      formAction('comment-form', async data => { if (!guard(route)) return; await api('/posts/' + p.id + '/comments','POST',data); document.querySelector('#comment').value=''; await loadComments(p.id); toast('댓글을 남겼습니다.'); });
       if (me?.id === p.user_id) {
         const panel = document.querySelector('#confirm-delete');
         document.querySelector('#delete-post').onclick = () => { panel.hidden = false; };
         document.querySelector('#delete-no').onclick = () => { panel.hidden = true; };
         document.querySelector('#delete-yes').onclick = async event => { event.target.disabled = true; try { await api('/posts/' + p.id, 'DELETE', {}); location.hash = 'home'; toast('삭제했습니다.'); } catch (e) { const err = panel.querySelector('[role=alert]'); err.textContent = e.message; err.hidden = false; event.target.disabled = false; } };
       }
-    } else if (route === 'profile') {
-      if (!guard(route)) return;
-      const result = await api('/posts?mine=1'); if (current !== generation) return;
-      main.innerHTML = `<section class="card"><div class="profile"><div class="avatar">🎣</div><div><span class="eyebrow">MY FISHING JOURNAL</span><h1>${esc(me.nickname)}</h1><p class="content">${esc(me.bio || '나만의 낚시 이야기를 남겨보세요.')}</p></div></div><a href="#profile-edit">프로필 편집 →</a><button id="logout">로그아웃</button></section><h2>내 조황 기록</h2><div id="posts"></div>`;
-      showList('#posts', result, '/posts?mine=1');
-      document.querySelector('#logout').onclick = async () => { try { await api('/logout', 'POST', {}); me = null; location.hash = 'home'; toast('로그아웃했습니다.'); } catch (e) { toast(e.message); } };
+    } else if (route === 'profile' || /^user\/\d+$/.test(route)) {
+      if (route === 'profile' && !guard(route)) return;
+      const userId = route === 'profile' ? me.id : Number(route.split('/')[1]);
+      const person = (await api('/users/' + userId)).user;
+      const result = await api('/posts?author=' + userId); if (current !== generation) return;
+      const mine = me?.id === userId;
+      main.innerHTML = `<section class="card"><div class="profile"><div class="avatar">🎣</div><div><span class="eyebrow">FISHING JOURNAL</span><h1>${esc(person.nickname)}</h1><p class="content">${esc(person.bio || '나만의 낚시 이야기를 남겨보세요.')}</p></div></div><div class="stats"><a href="#user/${userId}/followers"><strong>${person.followers}</strong>팔로워</a><a href="#user/${userId}/following"><strong>${person.following}</strong>팔로잉</a></div>${mine ? '<a href="#profile-edit">프로필 편집 →</a><button id="logout">로그아웃</button>' : `<button id="follow" aria-pressed="${person.followed}">${person.followed ? '팔로잉 취소' : '＋ 팔로우'}</button>`}</section><h2>${mine ? '내 조황 기록' : '조황 기록'}</h2><div id="posts"></div>`;
+      showList('#posts', result, '/posts?author=' + userId);
+      if (mine) document.querySelector('#logout').onclick = async () => { try { await api('/logout', 'POST', {}); me = null; location.hash = 'home'; toast('로그아웃했습니다.'); } catch (e) { toast(e.message); } };
+      else document.querySelector('#follow').onclick = async event => { if (!guard(route)) return; event.target.disabled=true; try { await api('/users/'+userId+'/follow', person.followed ? 'DELETE' : 'PUT', {}); render(); } catch (e) { toast(e.message); event.target.disabled=false; } };
+    } else if (/^user\/\d+\/(followers|following)$/.test(route)) {
+      const [,userId,kind] = route.split('/');
+      const person = (await api('/users/'+userId)).user;
+      if (current !== generation) return;
+      main.innerHTML = `<a class="back" href="#user/${userId}">← ${esc(person.nickname)} 프로필</a><h1>${kind === 'followers' ? '팔로워' : '팔로잉'}</h1><section class="card" id="people"></section>`;
+      await loadPeople(userId,kind);
     } else if (route === 'profile-edit') {
       if (!guard(route)) return;
       main.innerHTML = `<h1>나를 소개해요</h1><form id="profile" class="card form"><label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="30" value="${esc(me.nickname)}" required><label for="bio">소개</label><textarea id="bio" name="bio" maxlength="200">${esc(me.bio)}</textarea>${formError}<button class="primary" type="submit">프로필 저장</button></form>`;
@@ -85,5 +133,33 @@ async function render() {
     document.querySelector('#retry').onclick = render;
   }
 }
+async function loadComments(postId, before, target = '#comments') {
+  const routeAtStart=location.hash;
+  const result = await api('/posts/'+postId+'/comments'+(before ? '?before='+before : ''));
+  const container = document.querySelector(target); if (!container || routeAtStart!==location.hash) return;
+  container.innerHTML = result.comments.map(c => `<article class="comment"><a href="#user/${c.user_id}"><strong>${esc(c.nickname)}</strong></a><p class="content">${esc(c.body)}</p>${me?.id===c.user_id ? `<button data-delete-comment="${c.id}" data-post="${postId}">내 댓글 삭제</button>` : ''}</article>`).join('') || (before ? '' : '<p class="muted">첫 댓글을 남겨보세요.</p>');
+  if (result.next) {
+    const more = document.createElement('button'); more.textContent='이전 댓글 더 보기'; container.append(more);
+    more.onclick = async () => { more.disabled=true; try { const next = document.createElement('div'); next.id='comments-page-'+result.next; more.replaceWith(next); await loadComments(postId,result.next,'#'+next.id); } catch(e) { toast(e.message); await loadComments(postId); } };
+  }
+}
+async function loadPeople(userId,kind,before,target='#people') {
+  const routeAtStart=location.hash;
+  const result = await api('/users/'+userId+'/'+kind+(before ? '?before='+before : ''));
+  const container = document.querySelector(target); if (!container || routeAtStart!==location.hash) return;
+  container.innerHTML=result.users.map(u=>`<article class="comment"><a href="#user/${u.id}"><strong>${esc(u.nickname)}</strong></a><p class="content">${esc(u.bio)}</p></article>`).join('') || '<p class="muted">아직 목록이 비어있어요.</p>';
+  if (result.next) { const more=document.createElement('button'); more.textContent='더 보기'; container.append(more); more.onclick=async()=>{ more.disabled=true; try { const next=document.createElement('div'); next.id='people-page-'+result.next; more.replaceWith(next); await loadPeople(userId,kind,result.next,'#'+next.id); } catch(e) {toast(e.message);} }; }
+}
+main.addEventListener('click',async event => {
+  const button = event.target.closest('[data-like],[data-delete-comment]'); if (!button) return;
+  if (!guard(location.hash.slice(1)||'home')) return;
+  button.disabled=true;
+  try {
+    if (button.dataset.like) {
+      const result=await api('/posts/'+button.dataset.like+'/like',button.dataset.liked==='true' ? 'DELETE' : 'PUT',{});
+      button.dataset.liked=String(result.liked); button.setAttribute('aria-pressed',result.liked); button.classList.toggle('liked',result.liked); button.textContent=(result.liked ? '♥' : '♡')+' 좋아요 '+result.likes;
+    } else { await api('/comments/'+button.dataset.deleteComment,'DELETE',{}); await loadComments(button.dataset.post); toast('댓글을 삭제했습니다.'); }
+  } catch(e) {toast(e.message);} finally {button.disabled=false;}
+});
 addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
 render();

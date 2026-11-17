@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { normalizePhotos, MAX_POST_BYTES } from './photos.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -24,7 +25,15 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
     CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, title TEXT NOT NULL, body TEXT NOT NULL, fish TEXT NOT NULL, region TEXT NOT NULL, method TEXT NOT NULL, fishing_date TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS posts_user ON posts(user_id, id);
-    PRAGMA user_version=1;`);
+    CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, position INTEGER NOT NULL, data BLOB NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS photos_post ON photos(post_id,position);
+    CREATE TABLE IF NOT EXISTS likes (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, PRIMARY KEY(user_id,post_id));
+    CREATE INDEX IF NOT EXISTS likes_post ON likes(post_id);
+    CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id,id);
+    CREATE TABLE IF NOT EXISTS follows (id INTEGER PRIMARY KEY AUTOINCREMENT, follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, target_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, UNIQUE(follower_id,target_id), CHECK(follower_id != target_id));
+    CREATE INDEX IF NOT EXISTS follows_target ON follows(target_id,id);
+    PRAGMA user_version=2;`);
   const limits = new Map();
   const cookie = token => `hit_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${token ? 604800 : 0}${secure ? '; Secure' : ''}`;
   const sessionUser = req => {
@@ -35,7 +44,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
   async function handle(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Cache-Control', 'no-store');
     const send = (status, data) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(data)); };
     try {
@@ -47,17 +56,21 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         res.setHeader('Content-Type', `${file[1]}; charset=utf-8`);
         res.end(readFileSync(resolve(root, 'public', file[0]))); return;
       }
+      const user = sessionUser(req);
+      const auth = () => { if (!user) fail(401, '로그인이 필요합니다.'); return user; };
       let body = {};
       if (!['GET', 'HEAD'].includes(method)) {
         if (req.headers.origin !== origin) fail(403, '허용되지 않은 요청 출처입니다.');
         if (!(req.headers['content-type'] || '').startsWith('application/json')) fail(415, 'JSON 요청이 필요합니다.');
+        const isPostWrite = (path === '/api/posts' && method === 'POST') || (/^\/api\/posts\/\d+$/.test(path) && method === 'PATCH');
+        if (isPostWrite) auth();
+        const maxBytes = isPostWrite ? MAX_POST_BYTES : 16384;
+        if (Number(req.headers['content-length']) > maxBytes) fail(413, '입력 용량이 너무 큽니다.');
         let size = 0, chunks = [];
-        for await (const chunk of req) { size += chunk.length; if (size > 16384) fail(413, '입력 용량이 너무 큽니다.'); chunks.push(chunk); }
+        for await (const chunk of req) { size += chunk.length; if (size > maxBytes) fail(413, '입력 용량이 너무 큽니다.'); chunks.push(chunk); }
         try { body = JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch { fail(400, '요청 내용을 확인해주세요.'); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) fail(400, '요청 형식이 올바르지 않습니다.');
       }
-      const user = sessionUser(req);
-      const auth = () => { if (!user) fail(401, '로그인이 필요합니다.'); return user; };
       if (path === '/api/me' && method === 'GET') return send(200, { user: publicUser(user) });
       if (['/api/signup', '/api/login'].includes(path) && method === 'POST') {
         const key = req.socket.remoteAddress || 'local', now = Date.now();
@@ -97,28 +110,113 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         db.prepare('UPDATE users SET nickname=?,bio=? WHERE id=?').run(nickname, body.bio.trim(), user.id);
         return send(200, { user: publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)) });
       }
+      const decorate = p => ({ ...p,
+        photos: db.prepare('SELECT id,width,height FROM photos WHERE post_id=? ORDER BY position').all(p.id).map(photo => ({ ...photo, url: '/api/photos/' + photo.id })),
+        likes: db.prepare('SELECT count(*) n FROM likes WHERE post_id=?').get(p.id).n,
+        liked: !!(user && db.prepare('SELECT 1 FROM likes WHERE post_id=? AND user_id=?').get(p.id,user.id)),
+        comment_count: db.prepare('SELECT count(*) n FROM comments WHERE post_id=?').get(p.id).n });
       const select = 'SELECT p.*,u.nickname FROM posts p JOIN users u ON u.id=p.user_id';
+      const photoMatch = path.match(/^\/api\/photos\/([a-f0-9]{32})$/);
+      if (photoMatch && method === 'GET') {
+        const photo = db.prepare('SELECT data FROM photos WHERE id=?').get(photoMatch[1]);
+        if (!photo) fail(404, '사진이 없습니다.');
+        res.setHeader('Content-Type','image/webp'); res.end(Buffer.from(photo.data)); return;
+      }
+      const userMatch = path.match(/^\/api\/users\/(\d+)(?:\/(follow|followers|following))?$/);
+      if (userMatch) {
+        const target = Number(userMatch[1]), action = userMatch[2];
+        const person = db.prepare('SELECT id,nickname,bio FROM users WHERE id=?').get(target);
+        if (!person) fail(404, '사용자가 없습니다.');
+        if (action === 'follow' && ['PUT','DELETE'].includes(method)) {
+          auth(); if (target === user.id) fail(400, '자신을 팔로우할 수 없습니다.');
+          if (method === 'PUT') db.prepare('INSERT OR IGNORE INTO follows(follower_id,target_id) VALUES(?,?)').run(user.id,target);
+          else db.prepare('DELETE FROM follows WHERE follower_id=? AND target_id=?').run(user.id,target);
+          return send(200, { following: method === 'PUT' });
+        }
+        if (!action && method === 'GET') return send(200, { user: { ...person,
+          followers: db.prepare('SELECT count(*) n FROM follows WHERE target_id=?').get(target).n,
+          following: db.prepare('SELECT count(*) n FROM follows WHERE follower_id=?').get(target).n,
+          followed: !!(user && db.prepare('SELECT 1 FROM follows WHERE follower_id=? AND target_id=?').get(user.id,target)) } });
+        if (['followers','following'].includes(action) && method === 'GET') {
+          const followers = action === 'followers';
+          const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
+          const rows = db.prepare(`SELECT f.id AS cursor,u.id,u.nickname,u.bio FROM follows f JOIN users u ON u.id=f.${followers ? 'follower_id' : 'target_id'} WHERE f.${followers ? 'target_id' : 'follower_id'}=? AND f.id<? ORDER BY f.id DESC LIMIT 21`).all(target,before);
+          return send(200, { users: rows.slice(0,20), next: rows.length > 20 ? rows[19].cursor : null });
+        }
+      }
+      const interaction = path.match(/^\/api\/posts\/(\d+)\/(like|comments)$/);
+      if (interaction) {
+        const postId = Number(interaction[1]), action = interaction[2];
+        if (!db.prepare('SELECT 1 FROM posts WHERE id=?').get(postId)) fail(404, '게시물이 없습니다.');
+        if (action === 'like' && ['PUT','DELETE'].includes(method)) {
+          auth(); if (method === 'PUT') db.prepare('INSERT OR IGNORE INTO likes VALUES(?,?)').run(user.id,postId);
+          else db.prepare('DELETE FROM likes WHERE user_id=? AND post_id=?').run(user.id,postId);
+          return send(200, { liked: method === 'PUT', likes: db.prepare('SELECT count(*) n FROM likes WHERE post_id=?').get(postId).n });
+        }
+        if (action === 'comments' && method === 'GET') {
+          const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
+          const rows = db.prepare('SELECT c.*,u.nickname FROM comments c JOIN users u ON c.user_id=u.id WHERE c.post_id=? AND c.id<? ORDER BY c.id DESC LIMIT 21').all(postId,before);
+          return send(200, { comments: rows.slice(0,20), next: rows.length > 20 ? rows[19].id : null });
+        }
+        if (action === 'comments' && method === 'POST') {
+          auth(); const content = text(body.body,300,'댓글');
+          const r = db.prepare('INSERT INTO comments(post_id,user_id,body,created_at) VALUES(?,?,?,?)').run(postId,user.id,content,new Date().toISOString());
+          return send(201, { id: Number(r.lastInsertRowid) });
+        }
+      }
+      const commentMatch = path.match(/^\/api\/comments\/(\d+)$/);
+      if (commentMatch && method === 'DELETE') {
+        auth(); const comment = db.prepare('SELECT user_id FROM comments WHERE id=?').get(Number(commentMatch[1]));
+        if (!comment) fail(404, '댓글이 없습니다.');
+        if (comment.user_id !== user.id) fail(403, '본인의 댓글만 삭제할 수 있습니다.');
+        db.prepare('DELETE FROM comments WHERE id=?').run(Number(commentMatch[1])); return send(200,{ok:true});
+      }
       if (path === '/api/posts' && method === 'GET') {
         const clauses = [], values = [];
         if (url.searchParams.get('mine') === '1') { auth(); clauses.push('p.user_id=?'); values.push(user.id); }
+        if (url.searchParams.get('following') === '1') { auth(); clauses.push('p.user_id IN (SELECT target_id FROM follows WHERE follower_id=?)'); values.push(user.id); }
+        const author = Number(url.searchParams.get('author')); if (author > 0) { clauses.push('p.user_id=?'); values.push(author); }
         for (const field of ['fish', 'region']) { const v = url.searchParams.get(field); if (v) { clauses.push(`p.${field}=?`); values.push(v.slice(0, 80)); } }
         const before = Number(url.searchParams.get('before'));
         if (before > 0) { clauses.push('p.id<?'); values.push(before); }
         const rows = db.prepare(select + (clauses.length ? ' WHERE ' + clauses.join(' AND ') : '') + ' ORDER BY p.id DESC LIMIT 21').all(...values);
-        const posts = rows.slice(0, 20); return send(200, { posts, next: rows.length > 20 ? posts.at(-1).id : null });
+        const posts = rows.slice(0, 20).map(decorate); return send(200, { posts, next: rows.length > 20 ? posts.at(-1).id : null });
       }
       const match = path.match(/^\/api\/posts\/(\d+)$/), id = match ? Number(match[1]) : null;
-      if (match && method === 'GET') { const post = db.prepare(select + ' WHERE p.id=?').get(id); if (!post) fail(404, '게시물이 없습니다.'); return send(200, { post }); }
+      if (match && method === 'GET') { const post = db.prepare(select + ' WHERE p.id=?').get(id); if (!post) fail(404, '게시물이 없습니다.'); return send(200, { post: decorate(post) }); }
       if ((path === '/api/posts' && method === 'POST') || (match && method === 'PATCH')) {
         auth();
         if (id) { const old = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id); if (!old) fail(404, '게시물이 없습니다.'); if (old.user_id !== user.id) fail(403, '본인의 게시물만 수정할 수 있습니다.'); }
         const fields = [text(body.title, 60, '제목'), text(body.body, 2000, '내용'), text(body.fish, 30, '어종'), text(body.region, 50, '지역'), text(body.method, 30, '낚시 방식')];
         const date = text(body.fishing_date, 10, '출조일');
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) fail(400, '출조일을 확인해주세요.');
+        // Omitted photos preserve an existing post; supplied arrays replace all photos atomically.
+        if (!id && (!Array.isArray(body.photos) || !body.photos.length)) fail(400,'새 조황에는 사진을 한 장 이상 선택해주세요.');
+        if (body.photos !== undefined && (!Array.isArray(body.photos) || body.photos.length < 1)) fail(400,'사진을 한 장 이상 남겨주세요.');
+        if (Array.isArray(body.photos) && body.photos.length > 5) fail(400,'사진은 최대 5장까지 등록할 수 있습니다.');
+        const photoInputs = body.photos?.map(photo => {
+          if (!photo?.id) return photo;
+          const existing = id && db.prepare('SELECT data FROM photos WHERE id=? AND post_id=?').get(String(photo.id),id);
+          if (!existing) fail(400,'현재 게시물의 사진만 사용할 수 있습니다.');
+          return { data: Buffer.from(existing.data).toString('base64') };
+        });
+        const photos = photoInputs === undefined ? null : await normalizePhotos(photoInputs);
         let savedId = id;
-        if (id) db.prepare('UPDATE posts SET title=?,body=?,fish=?,region=?,method=?,fishing_date=? WHERE id=?').run(...fields, date, id);
-        else savedId = Number(db.prepare('INSERT INTO posts(user_id,title,body,fish,region,method,fishing_date,created_at) VALUES(?,?,?,?,?,?,?,?)').run(user.id, ...fields, date, new Date().toISOString()).lastInsertRowid);
-        return send(id ? 200 : 201, { post: db.prepare(select + ' WHERE p.id=?').get(savedId) });
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (id) {
+            const current = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id);
+            if (!current) fail(404,'게시물이 없습니다.');
+            if (current.user_id !== user.id) fail(403,'본인의 게시물만 수정할 수 있습니다.');
+            db.prepare('UPDATE posts SET title=?,body=?,fish=?,region=?,method=?,fishing_date=? WHERE id=?').run(...fields,date,id);
+          } else savedId = Number(db.prepare('INSERT INTO posts(user_id,title,body,fish,region,method,fishing_date,created_at) VALUES(?,?,?,?,?,?,?,?)').run(user.id,...fields,date,new Date().toISOString()).lastInsertRowid);
+          if (photos) {
+            db.prepare('DELETE FROM photos WHERE post_id=?').run(savedId);
+            photos.forEach((photo,position) => db.prepare('INSERT INTO photos VALUES(?,?,?,?,?,?)').run(randomBytes(16).toString('hex'),savedId,position,photo.data,photo.width,photo.height));
+          }
+          db.exec('COMMIT');
+        } catch (err) { db.exec('ROLLBACK'); throw err; }
+        return send(id ? 200 : 201, { post: decorate(db.prepare(select + ' WHERE p.id=?').get(savedId)) });
       }
       if (match && method === 'DELETE') {
         auth(); const post = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id);

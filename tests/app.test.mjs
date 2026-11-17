@@ -1,4 +1,5 @@
 import test from 'node:test';
+import sharp from 'sharp';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -14,10 +15,11 @@ async function request(app, method, path, data, cookie, overrides = {}) {
   const headers = {}; let raw = '';
   const res = { statusCode: 200, setHeader(k, v) { headers[k.toLowerCase()] = v; }, end(s) { raw = s; } };
   await app.handle(req, res);
-  return { status: res.statusCode, body: headers['content-type']?.includes('application/json') ? JSON.parse(raw) : raw.toString(), headers, cookie: headers['set-cookie']?.split(';')[0] };
+  return { status: res.statusCode, body: headers['content-type']?.includes('application/json') ? JSON.parse(raw) : headers['content-type']?.startsWith('image/') ? Buffer.from(raw) : raw.toString(), headers, cookie: headers['set-cookie']?.split(';')[0] };
 }
 const credentials = email => ({ email, password: 'a-long-test-password-123', nickname: '테스트 낚시인' });
-const post = { title: '첫 농어', body: '강릉에서 만난 한 수', fish: '농어', region: '강원 강릉시', method: '루어', fishing_date: '2026-11-17' };
+const samplePhoto = (await sharp({ create: { width: 10, height: 10, channels: 3, background: '#237e9f' } }).png().toBuffer()).toString('base64');
+const post = { photos: [{data:samplePhoto}], title: '첫 농어', body: '강릉에서 만난 한 수', fish: '농어', region: '강원 강릉시', method: '루어', fishing_date: '2026-11-17' };
 
 test('two-account authentication, owner permissions, validation and logout revocation', async t => {
   const app = createApp({ database: ':memory:' }); t.after(app.close);
@@ -44,7 +46,7 @@ test('two-account authentication, owner permissions, validation and logout revoc
   assert.equal((await request(app, 'POST', '/api/posts', post, a.cookie, { origin: 'https://other.example' })).status, 403);
   assert.equal((await request(app, 'POST', '/api/posts', post, a.cookie, { origin: undefined })).status, 403);
   assert.equal((await request(app, 'POST', '/api/posts', post, a.cookie, { 'content-type': 'text/plain' })).status, 415);
-  assert.equal((await request(app, 'POST', '/api/posts', { ...post, body: 'x'.repeat(20000) }, a.cookie)).status, 413);
+  assert.equal((await request(app, 'POST', '/api/posts', { ...post, body: 'x'.repeat(20000) }, a.cookie)).status, 400);
   assert.equal((await request(app, 'POST', '/api/logout', {}, a.cookie)).status, 200);
   assert.equal((await request(app, 'GET', '/api/me', undefined, a.cookie)).body.user, null);
   const login = await request(app, 'POST', '/api/login', credentials('a@example.test'));
@@ -84,4 +86,78 @@ test('pagination is bounded without overlap and authentication is rate limited',
   const page = await request(app, 'GET', '/'); assert.equal(page.status, 200);
   assert.ok(page.headers['content-security-policy'].includes("script-src 'self'"));
   assert.equal((await request(app, 'GET', '/data/hit.sqlite')).status, 404);
+});
+
+test('photo decoding, metadata removal, atomic replacements and attachment isolation', async t => {
+  const app = createApp({ database: ':memory:' }); t.after(app.close);
+  const a = await request(app,'POST','/api/signup',credentials('photo-a@example.test'));
+  const b = await request(app,'POST','/api/signup',credentials('photo-b@example.test'));
+  const jpeg = await sharp({create:{width:12,height:8,channels:3,background:'#176a8a'}}).jpeg().withMetadata({orientation:6}).toBuffer();
+  assert.ok((await sharp(jpeg).metadata()).exif);
+  const created = await request(app,'POST','/api/posts',{...post,photos:[{data:jpeg.toString('base64')},{data:samplePhoto}]},a.cookie);
+  assert.equal(created.status,201); const saved = created.body.post;
+  assert.equal(saved.photos.length,2);
+  const picture = await request(app,'GET',saved.photos[0].url);
+  assert.equal(picture.headers['content-type'],'image/webp');
+  const meta = await sharp(picture.body).metadata();
+  assert.equal(meta.format,'webp'); assert.equal(meta.width,8); assert.equal(meta.height,12);
+  assert.equal(meta.exif,undefined); assert.equal(meta.xmp,undefined); assert.equal(meta.iptc,undefined);
+  const invalidInputs = [[], Array(6).fill({data:samplePhoto}), [{data:Buffer.from('<svg></svg>').toString('base64')}], [{data:'not base64!'}], [{data:jpeg.subarray(0,100).toString('base64')}]];
+  for (const photos of invalidInputs) {
+    const r = await request(app,'PATCH','/api/posts/'+saved.id,{...post,title:'잘못된 수정',photos},a.cookie);
+    assert.equal(r.status,400);
+    const unchanged = (await request(app,'GET','/api/posts/'+saved.id)).body.post;
+    assert.equal(unchanged.title,post.title); assert.equal(unchanged.photos.length,2);
+  }
+  const other = await request(app,'POST','/api/posts',post,b.cookie);
+  assert.equal((await request(app,'PATCH','/api/posts/'+other.body.post.id,{...post,photos:[{id:saved.photos[0].id}]},b.cookie)).status,400);
+  assert.equal((await request(app,'PATCH','/api/posts/'+saved.id,post,b.cookie)).status,403);
+  assert.equal((await request(app,'POST','/api/posts',post,a.cookie,{'content-length':String(100*1024*1024)})).status,413);
+  const replacement=await request(app,'PATCH','/api/posts/'+saved.id,{...post,photos:[{id:saved.photos[1].id}]},a.cookie);
+  assert.equal(replacement.status,200); assert.equal(replacement.body.post.photos.length,1);
+  assert.equal((await request(app,'GET',saved.photos[0].url)).status,404);
+  await request(app,'DELETE','/api/posts/'+saved.id,{},a.cookie);
+  assert.equal((await request(app,'GET',replacement.body.post.photos[0].url)).status,404);
+});
+
+test('persistent likes, comments and follows; ownership, idempotence and following feed', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'hit-social-')), database=join(dir,'hit.sqlite');
+  t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  let app=createApp({database});
+  const a=await request(app,'POST','/api/signup',credentials('social-a@example.test'));
+  const b=await request(app,'POST','/api/signup',credentials('social-b@example.test'));
+  const id=(await request(app,'POST','/api/posts',post,a.cookie)).body.post.id;
+  const target=a.body.user.id, viewer=b.body.user.id;
+  assert.equal((await request(app,'PUT','/api/posts/'+id+'/like',{})).status,401);
+  assert.equal((await request(app,'POST','/api/posts/'+id+'/comments',{body:'댓글'})).status,401);
+  assert.equal((await request(app,'PUT','/api/users/'+target+'/follow',{})).status,401);
+  for(let i=0;i<2;i++) assert.equal((await request(app,'PUT','/api/posts/'+id+'/like',{},b.cookie)).body.likes,1);
+  const comment=await request(app,'POST','/api/posts/'+id+'/comments',{body:'멋진 한 수네요!'},b.cookie);
+  assert.equal(comment.status,201);
+  assert.equal((await request(app,'DELETE','/api/comments/'+comment.body.id,{},a.cookie)).status,403);
+  assert.equal((await request(app,'POST','/api/posts/'+id+'/comments',{body:' '.repeat(20)},b.cookie)).status,400);
+  assert.equal((await request(app,'POST','/api/posts/'+id+'/comments',{body:'x'.repeat(301)},b.cookie)).status,400);
+  assert.equal((await request(app,'PUT','/api/users/'+target+'/follow',{},a.cookie)).status,400);
+  assert.equal((await request(app,'GET','/api/posts?following=1',undefined,b.cookie)).body.posts.length,0);
+  for(let i=0;i<2;i++) assert.equal((await request(app,'PUT','/api/users/'+target+'/follow',{},b.cookie)).status,200);
+  assert.equal((await request(app,'GET','/api/users/'+target)).body.user.followers,1);
+  assert.equal((await request(app,'GET','/api/users/'+viewer)).body.user.following,1);
+  const followers=(await request(app,'GET','/api/users/'+target+'/followers')).body.users;
+  assert.equal(followers.length,1); assert.equal(followers[0].id,viewer); assert.equal(followers[0].email,undefined);
+  app.close(); app=createApp({database}); t.after(()=>app.close());
+  const persisted=(await request(app,'GET','/api/posts?following=1',undefined,b.cookie)).body.posts;
+  assert.equal(persisted.length,1); assert.equal(persisted[0].liked,true); assert.equal(persisted[0].likes,1); assert.equal(persisted[0].comment_count,1); assert.equal(persisted[0].photos.length,1);
+  assert.equal((await request(app,'GET','/api/posts/'+id+'/comments')).body.comments[0].body,'멋진 한 수네요!');
+  await request(app,'DELETE','/api/comments/'+comment.body.id,{},b.cookie);
+  assert.equal((await request(app,'GET','/api/posts/'+id)).body.post.comment_count,0);
+  for(let i=0;i<2;i++) assert.equal((await request(app,'DELETE','/api/posts/'+id+'/like',{},b.cookie)).body.likes,0);
+  await request(app,'DELETE','/api/users/'+target+'/follow',{},b.cookie);
+  assert.equal((await request(app,'GET','/api/posts?following=1',undefined,b.cookie)).body.posts.length,0);
+  assert.equal((await request(app,'GET','/api/users/'+target)).body.user.followers,0);
+  await request(app,'POST','/api/posts/'+id+'/comments',{body:'삭제 시 함께 지워질 댓글'},b.cookie);
+  await request(app,'PUT','/api/posts/'+id+'/like',{},b.cookie);
+  await request(app,'DELETE','/api/posts/'+id,{},a.cookie);
+  const db=new DatabaseSync(database);
+  for(const table of ['photos','comments','likes']) assert.equal(db.prepare('SELECT count(*) n FROM '+table).get().n,0);
+  db.close();
 });
