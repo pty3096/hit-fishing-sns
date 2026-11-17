@@ -117,6 +117,6 @@ test('backup restores a usable database including account verification and data 
     const login=await request(restored,'POST','/api/login',credentials('backup@example.test'));
     assert.equal(login.status,200);assert.equal(login.body.user.email_verified,true);
     assert.equal((await request(restored,'GET','/api/health')).status,200);
-    const db=new DatabaseSync(destination);assert.equal(db.prepare('PRAGMA user_version').get().user_version,5);db.close();
+    const db=new DatabaseSync(destination);assert.equal(db.prepare('PRAGMA user_version').get().user_version,6);db.close();
   }finally{restored.close();}
 });

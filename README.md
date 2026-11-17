@@ -13,6 +13,8 @@ Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 
 
 ## 자료
 
+- [연결 오류 후 조황 등록 재시도](docs/18_POST_RETRIES.md)
+
 - [아이폰용 보호된 시범 접속](docs/17_IPHONE_PREVIEW.md)
 
 - [휴대폰 시범 사용 준비·점검표](docs/16_PHONE_TRIAL.md) · 로컬 접속 점검: `npm run check:local`

@@ -152,12 +152,18 @@ async function render({focus=false}={}) {
         else {event.target.removeAttribute('aria-invalid');for (const file of files) { const url = URL.createObjectURL(file); previewUrls.push(url); selectedPhotos.push({file,url}); }}
         event.target.value = ''; previews();
       };
+      let lastFingerprint=null,lastRequestId=null;
       formAction('post-form',async(data,stillHere)=>{
         if (!selectedPhotos.length && (!id || originalCount)) throw new Error('사진을 한 장 이상 남겨주세요.');
         if (selectedPhotos.length) {
           const submit = document.querySelector('#post-form button[type=submit]'); submit.textContent = '사진을 저장하는 중…';
           try { data.photos = await Promise.all(selectedPhotos.map(async photo => photo.id ? {id:photo.id} : {data:await fileBase64(photo.file)})); }
           finally { submit.textContent = id ? '수정 저장' : '조황 등록'; }
+        }
+        if(!id){
+          const fingerprint=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(data)))),byte=>byte.toString(16).padStart(2,'0')).join('');
+          if(fingerprint!==lastFingerprint){lastFingerprint=fingerprint;lastRequestId=crypto.randomUUID().replaceAll('-','');}
+          data.request_id=lastRequestId;
         }
         const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); if(stillHere()||JSON.stringify(drafts.read(owner,key))===JSON.stringify(draftFields(data)))drafts.remove(owner,key);if(stillHere()){editor=null;location.hash='post/'+post.id;}toast('조황을 저장했습니다.'); });
     } else if (/^post\/\d+$/.test(route)) {

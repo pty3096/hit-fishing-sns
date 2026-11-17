@@ -44,6 +44,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
   const mod = moderation(db);
   const emailService = emailAuth(db,{origin,...mail,now});
   db.exec(`CREATE TABLE IF NOT EXISTS avatars(user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,revision TEXT NOT NULL,data BLOB NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL); PRAGMA user_version=5;`);
+  db.exec(`CREATE TABLE IF NOT EXISTS post_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,post_id INTEGER REFERENCES posts(id) ON DELETE SET NULL,PRIMARY KEY(user_id,request_id)); PRAGMA user_version=6;`);
   const avatarURL=id=>{const row=db.prepare('SELECT revision FROM avatars WHERE user_id=?').get(id);return row?`/api/avatars/${id}/${row.revision}`:null;};
   const publicUser=u=>u?{...baseUser(u),avatar_url:avatarURL(u.id)}:null;
   const limits = new Map();
@@ -236,6 +237,19 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       if (match && method === 'GET') { const post = db.prepare(select + ' WHERE p.id=?').get(id); if (!mod.postVisible(post,user)) fail(404, '게시물이 없습니다.'); return send(200, { post: decorate(post) }); }
       if ((path === '/api/posts' && method === 'POST') || (match && method === 'PATCH')) {
         auth();
+        const requestId=!id?body.request_id:undefined;
+        if(requestId!==undefined&&(typeof requestId!=='string'||!/^[a-f0-9]{32}$/.test(requestId)))fail(400,'등록 요청 정보를 확인해주세요.');
+        const fingerprint=requestId?digest(JSON.stringify({...body,request_id:undefined})):null;
+        const replay=()=>{
+          if(!requestId)return null;
+          const record=db.prepare('SELECT * FROM post_requests WHERE user_id=? AND request_id=?').get(user.id,requestId);
+          if(!record)return null;
+          if(record.fingerprint!==fingerprint)fail(409,'등록 내용이 바뀌었습니다. 새 요청으로 다시 시도해주세요.');
+          const post=record.post_id&&db.prepare(select+' WHERE p.id=?').get(record.post_id);
+          if(!post||!mod.postVisible(post,user))fail(409,'이미 처리된 요청입니다. 내 조황 목록을 확인해주세요.');
+          return {post:decorate(post),replayed:true};
+        };
+        const completed=replay();if(completed)return send(200,completed);
         if (id) { const old = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id); if (!old) fail(404, '게시물이 없습니다.'); if (old.user_id !== user.id) fail(403, '본인의 게시물만 수정할 수 있습니다.'); if(!mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(id),user))fail(403,'숨김 처리된 게시물은 수정할 수 없습니다.'); }
         const fields = [text(body.title, 60, '제목'), text(body.body, 2000, '내용'), text(body.fish, 30, '어종'), text(body.region, 50, '지역'), text(body.method, 30, '낚시 방식')];
         const date = text(body.fishing_date, 10, '출조일');
@@ -255,6 +269,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         db.exec('BEGIN IMMEDIATE');
         try {
           auth();
+          const concurrent=replay();if(concurrent){db.exec('COMMIT');return send(200,concurrent);}
           if (id) {
             const current = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id);
             if (!current) fail(404,'게시물이 없습니다.');
@@ -266,6 +281,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
             db.prepare('DELETE FROM photos WHERE post_id=?').run(savedId);
             photos.forEach((photo,position) => db.prepare('INSERT INTO photos VALUES(?,?,?,?,?,?)').run(randomBytes(16).toString('hex'),savedId,position,photo.data,photo.width,photo.height));
           }
+          if(requestId)db.prepare('INSERT INTO post_requests VALUES(?,?,?,?)').run(user.id,requestId,fingerprint,savedId);
           db.exec('COMMIT');
         } catch (err) { db.exec('ROLLBACK'); throw err; }
         return send(id ? 200 : 201, { post: decorate(db.prepare(select + ' WHERE p.id=?').get(savedId)) });

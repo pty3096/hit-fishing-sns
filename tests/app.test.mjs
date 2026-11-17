@@ -279,3 +279,24 @@ test('search accepts partial region and fish names while treating SQL wildcards 
   assert.equal((await request(app,'GET','/api/posts?fish='+encodeURIComponent('농')+'&region='+encodeURIComponent('거제'))).body.posts.length,0);
   assert.equal((await request(app,'GET','/api/posts?region='+encodeURIComponent("' OR 1=1 --"))).body.posts.length,0);
 });
+
+test('post retry after lost response is persistent, scoped, atomic and cannot recreate deleted posts',async t=>{
+ const folder=mkdtempSync(join(tmpdir(),'hit-retry-')),database=join(folder,'app.sqlite');let app=createApp({database});
+ t.after(()=>{app.close();rmSync(folder,{recursive:true,force:true});});
+ const a=await request(app,'POST','/api/signup',credentials('retry@example.test'));
+ const data={...post,request_id:'a'.repeat(32)};
+ const first=await request(app,'POST','/api/posts',data,a.cookie);assert.equal(first.status,201);
+ app.close();app=createApp({database});
+ const retry=await request(app,'POST','/api/posts',data,a.cookie);assert.equal(retry.status,200);assert.equal(retry.body.post.id,first.body.post.id);
+ assert.equal((await request(app,'GET','/api/posts')).body.posts.length,1);
+ assert.equal((await request(app,'POST','/api/posts',{...data,title:'changed'},a.cookie)).status,409);
+ assert.equal((await request(app,'POST','/api/posts',{...data,request_id:'invalid'},a.cookie)).status,400);
+ const b=await request(app,'POST','/api/signup',credentials('retry-b@example.test'));
+ assert.equal((await request(app,'POST','/api/posts',data,b.cookie)).status,201);
+ const parallel={...post,request_id:'b'.repeat(32)};
+ const results=await Promise.all([request(app,'POST','/api/posts',parallel,a.cookie),request(app,'POST','/api/posts',parallel,a.cookie)]);
+ assert.deepEqual(results.map(r=>r.status).sort(),[200,201]);assert.equal(results[0].body.post.id,results[1].body.post.id);
+ await request(app,'DELETE','/api/posts/'+first.body.post.id,{},a.cookie);
+ assert.equal((await request(app,'POST','/api/posts',data,a.cookie)).status,409);
+ assert.equal((await request(app,'POST','/api/posts',data)).status,401);
+});
