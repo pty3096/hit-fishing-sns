@@ -46,6 +46,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
   db.exec(`CREATE TABLE IF NOT EXISTS avatars(user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,revision TEXT NOT NULL,data BLOB NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL); PRAGMA user_version=5;`);
   db.exec(`CREATE TABLE IF NOT EXISTS post_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,post_id INTEGER REFERENCES posts(id) ON DELETE SET NULL,PRIMARY KEY(user_id,request_id)); PRAGMA user_version=6;`);
   db.exec(`CREATE TABLE IF NOT EXISTS comment_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,comment_id INTEGER REFERENCES comments(id) ON DELETE SET NULL,PRIMARY KEY(user_id,request_id)); PRAGMA user_version=7;`);
+  db.exec(`CREATE TABLE IF NOT EXISTS saved_posts(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,PRIMARY KEY(user_id,post_id)); CREATE INDEX IF NOT EXISTS saved_posts_post ON saved_posts(post_id); PRAGMA user_version=8;`);
   const avatarURL=id=>{const row=db.prepare('SELECT revision FROM avatars WHERE user_id=?').get(id);return row?`/api/avatars/${id}/${row.revision}`:null;};
   const publicUser=u=>u?{...baseUser(u),avatar_url:avatarURL(u.id)}:null;
   const limits = new Map();
@@ -164,6 +165,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       const decorate = p => ({ ...p, avatar_url:avatarURL(p.user_id),
         photos: db.prepare('SELECT id,width,height FROM photos WHERE post_id=? ORDER BY position').all(p.id).map(photo => ({ ...photo, url: '/api/photos/' + photo.id })),
         likes: db.prepare('SELECT count(*) n FROM likes WHERE post_id=?').get(p.id).n,
+        saved: !!(user && db.prepare('SELECT 1 FROM saved_posts WHERE post_id=? AND user_id=?').get(p.id,user.id)),
         liked: !!(user && db.prepare('SELECT 1 FROM likes WHERE post_id=? AND user_id=?').get(p.id,user.id)),
         comment_count: db.prepare(`SELECT count(*) n FROM comments c WHERE c.post_id=? AND ${mod.visibleSQL('c',user?.id)}`).get(p.id).n });
       const select = 'SELECT p.*,u.nickname FROM posts p JOIN users u ON u.id=p.user_id';
@@ -196,10 +198,16 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
           return send(200, { users: rows.slice(0,20).map(u=>({...u,avatar_url:avatarURL(u.id)})), next: rows.length > 20 ? rows[19].cursor : null });
         }
       }
-      const interaction = path.match(/^\/api\/posts\/(\d+)\/(like|comments)$/);
+      const interaction = path.match(/^\/api\/posts\/(\d+)\/(like|comments|save)$/);
       if (interaction) {
         const postId = Number(interaction[1]), action = interaction[2];
         if (!mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(postId),user)) fail(404, '게시물이 없습니다.');
+        if(action==='save'&&['PUT','DELETE'].includes(method)){
+          auth();
+          if(method==='PUT')db.prepare('INSERT OR IGNORE INTO saved_posts VALUES(?,?)').run(user.id,postId);
+          else db.prepare('DELETE FROM saved_posts WHERE user_id=? AND post_id=?').run(user.id,postId);
+          return send(200,{saved:method==='PUT'});
+        }
         if (action === 'like' && ['PUT','DELETE'].includes(method)) {
           auth(); if (method === 'PUT') db.prepare('INSERT OR IGNORE INTO likes VALUES(?,?)').run(user.id,postId);
           else db.prepare('DELETE FROM likes WHERE user_id=? AND post_id=?').run(user.id,postId);
@@ -244,6 +252,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         const clauses = [mod.visibleSQL('p',user?.id)], values = [];
         if (url.searchParams.get('mine') === '1') { auth(); clauses.push('p.user_id=?'); values.push(user.id); }
         if (url.searchParams.get('following') === '1') { auth(); clauses.push('p.user_id IN (SELECT target_id FROM follows WHERE follower_id=?)'); values.push(user.id); }
+        if(url.searchParams.get('saved')==='1'){auth();clauses.push('p.id IN (SELECT post_id FROM saved_posts WHERE user_id=?)');values.push(user.id);}
         const author = Number(url.searchParams.get('author')); if (author > 0) { clauses.push('p.user_id=?'); values.push(author); }
         for (const field of ['fish', 'region']) { const v = url.searchParams.get(field)?.trim(); if (v) { clauses.push(`p.${field} LIKE ? ESCAPE '\\'`); values.push('%'+v.slice(0,80).replace(/[\\%_]/g,'\\$&')+'%'); } }
         const before = Number(url.searchParams.get('before'));

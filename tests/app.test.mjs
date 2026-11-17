@@ -330,3 +330,36 @@ test('comment retries survive restart, scope accounts and posts, retain deletion
  const withdrawn=await request(app,'DELETE','/api/account',{password:credentials('').password,confirm:'탈퇴'},b.cookie);assert.equal(withdrawn.status,200);
  db=new DatabaseSync(database);assert.equal(db.prepare('SELECT count(*) n FROM comment_requests WHERE user_id=?').get(b.body.user.id).n,0);db.close();
 });
+
+test('saved posts are private, idempotent, persistent and respect pagination, moderation and deletion',async t=>{
+ const folder=mkdtempSync(join(tmpdir(),'hit-saved-')),database=join(folder,'app.sqlite');let app=createApp({database});
+ t.after(()=>{app.close();rmSync(folder,{recursive:true,force:true});});
+ const a=await request(app,'POST','/api/signup',credentials('save-a@example.test'));
+ const b=await request(app,'POST','/api/signup',credentials('save-b@example.test'));
+ const p=(await request(app,'POST','/api/posts',post,a.cookie)).body.post;
+ const endpoint='/api/posts/'+p.id+'/save';
+ assert.equal((await request(app,'PUT',endpoint,{})).status,401);
+ assert.equal((await request(app,'GET','/api/posts?saved=1')).status,401);
+ for(let i=0;i<2;i++)assert.equal((await request(app,'PUT',endpoint,{},b.cookie)).body.saved,true);
+ assert.equal((await request(app,'GET','/api/posts/'+p.id,undefined,b.cookie)).body.post.saved,true);
+ assert.equal((await request(app,'GET','/api/posts/'+p.id,undefined,a.cookie)).body.post.saved,false);
+ assert.equal((await request(app,'GET','/api/posts?saved=1&user_id='+b.body.user.id,undefined,a.cookie)).body.posts.length,0);
+ assert.equal((await request(app,'GET','/api/posts?saved=1&before='+p.id,undefined,b.cookie)).body.posts.length,0);
+ app.close();app=createApp({database});
+ assert.equal((await request(app,'GET','/api/posts?saved=1',undefined,b.cookie)).body.posts.length,1);
+ let db=new DatabaseSync(database);db.prepare('UPDATE posts SET hidden=1 WHERE id=?').run(p.id);db.close();
+ assert.equal((await request(app,'GET','/api/posts?saved=1',undefined,b.cookie)).body.posts.length,0);
+ assert.equal((await request(app,'PUT',endpoint,{},b.cookie)).status,404);
+ db=new DatabaseSync(database);db.prepare('UPDATE posts SET hidden=0 WHERE id=?').run(p.id);db.close();
+ assert.equal((await request(app,'PUT','/api/blocks/'+a.body.user.id,{},b.cookie)).status,200);
+ assert.equal((await request(app,'GET','/api/posts?saved=1',undefined,b.cookie)).body.posts.length,0);
+ assert.equal((await request(app,'PUT',endpoint,{},b.cookie)).status,404);
+ await request(app,'DELETE','/api/blocks/'+a.body.user.id,{},b.cookie);
+ for(let i=0;i<2;i++)assert.equal((await request(app,'DELETE',endpoint,{},b.cookie)).body.saved,false);
+ assert.equal((await request(app,'GET','/api/posts?saved=1',undefined,b.cookie)).body.posts.length,0);
+ await request(app,'PUT',endpoint,{},b.cookie);
+ assert.equal((await request(app,'DELETE','/api/account',{password:credentials('').password,confirm:'탈퇴'},b.cookie)).status,200);
+ db=new DatabaseSync(database);assert.equal(db.prepare('SELECT count(*) n FROM saved_posts').get().n,0);db.close();
+ await request(app,'PUT',endpoint,{},a.cookie);await request(app,'DELETE','/api/posts/'+p.id,{},a.cookie);
+ db=new DatabaseSync(database);assert.equal(db.prepare('SELECT count(*) n FROM saved_posts').get().n,0);db.close();
+});
