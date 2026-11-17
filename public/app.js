@@ -36,8 +36,8 @@ function formAction(id, action) {
   };
 }
 const icon=name=>`<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
-const upcoming={shorts:'숏폼',map:'포인트지도',booking:'선상예약',market:'장터',ranking:'랭킹'};
-function quickLinks(){return `<div class="quick-grid">${[['feed','feed','조황피드'],['coming/shorts','play','숏폼영상'],['coming/map','map','낚시지도'],['coming/booking','calendar','출조예약'],['community','users','커뮤니티'],['coming/ranking','users','랭킹']].map(([href,symbol,label])=>`<a href="#${href}" class="quick-tile">${icon(symbol)}<strong>${label}</strong>${href.startsWith('coming')?'<small>준비 중</small>':''}</a>`).join('')}</div>`;}
+const upcoming={shorts:'숏폼',map:'포인트지도',booking:'선상예약',market:'장터'};
+function quickLinks(){return `<div class="quick-grid">${[['feed','feed','조황피드'],['coming/shorts','play','숏폼영상'],['coming/map','map','낚시지도'],['coming/booking','calendar','출조예약'],['community','users','커뮤니티'],['ranking','trophy','랭킹']].map(([href,symbol,label])=>`<a href="#${href}" class="quick-tile">${icon(symbol)}<strong>${label}</strong>${href.startsWith('coming')?'<small>준비 중</small>':''}</a>`).join('')}</div>`;}
 function discovery(posts){
  const authors=[...new Map(posts.map(p=>[p.user_id,p])).values()].slice(0,3);
  document.querySelector('#discovery').innerHTML=`<section class="card"><h2>만나보는 낚시인</h2>${authors.map(p=>`<a class="discovery-person" href="#user/${p.user_id}">${avatar(p)}<span><strong>${esc(p.nickname)}</strong><small>조황 작성자</small></span><b>프로필</b></a>`).join('')||'<p class="muted">첫 조황의 주인공이 되어주세요.</p>'}</section><section class="card"><h2>새로 올라온 조황 <span class="live-dot"></span></h2>${posts.slice(0,3).map(p=>`<a class="latest-item" href="#post/${p.id}">${p.photos?.[0]?`<img src="${esc(p.photos[0].url)}" alt="" loading="lazy">`:icon('feed')}<span><strong>${esc(p.fish)}</strong><small>${esc(p.region)} · ${esc(p.nickname)}</small></span></a>`).join('')||'<p class="muted">아직 등록된 조황이 없어요.</p>'}<p class="field-help">화면을 연 시점의 최근 기록입니다.</p></section>`;
@@ -94,6 +94,11 @@ async function render({focus=false}={}) {
         formAction('search',async data=>{const error=searchValidation(data);if(error)throw new Error(error);const path=searchPath(new URLSearchParams(data));const hash='#search'+(path.includes('?')?path.slice(path.indexOf('?')):'');if(location.hash===hash)await render({focus:true});else location.hash=hash;});
         document.querySelector('#reset-search').onclick=()=>{if(location.hash==='#search')render();else location.hash='search';};
       }
+    } else if(route==='ranking'){
+      const period=params.get('period')||'7';
+      const result=await api('/rankings?period='+encodeURIComponent(period));if(current!==generation)return;
+      main.innerHTML=`<div class="section-head"><div><p class="eyebrow">POPULAR CATCHES</p><h1>${icon('trophy')} 인기 조황 랭킹</h1></div><button type="button" id="refresh-ranking">새로고침</button></div><div class="tabs ranking-periods">${[['7','최근 7일'],['30','최근 30일'],['all','전체 기간']].map(([value,label])=>`<a class="filter-tab" href="#ranking?period=${value}" aria-current="${period===value?'page':'false'}">${label}</a>`).join('')}</div><section class="ranking-guide"><p>${period==='all'?'전체 기간':`최근 ${esc(period)}일`}에 등록된 조황의 <strong>누적 좋아요 수</strong> 순입니다. 동률이면 나중에 등록된 글을 먼저 표시합니다.</p><p class="field-help">좋아요 1개 이상인 공개 조황 최대 20개 · 커뮤니티 제외<br>조회 시점: ${esc(new Date(result.generated_at).toLocaleString('ko-KR'))} · 새로고침하면 순위가 갱신됩니다.</p></section><div id="ranking-posts">${result.posts.map((p,i)=>`<section class="rank-entry"><div class="rank-label ${i<3?'rank-top':''}">${icon('trophy')} <strong>${i+1}위</strong><span>누적 좋아요 ${p.ranking_likes}</span></div>${card(p)}</section>`).join('')||'<section class="card empty"><h2>아직 순위에 오른 조황이 없어요.</h2><p class="muted">선택한 기간에 등록되고 좋아요를 받은 조황이 여기에 표시됩니다.</p><a class="primary" href="#feed">조황피드 둘러보기</a></section>'}</div>`;
+      document.querySelector('#refresh-ranking').onclick=()=>render();
     } else if(route==='community'){
       const author=Number(params.get('author'))||null;
       const path='/posts?kind=community'+(author?'&author='+author:'');

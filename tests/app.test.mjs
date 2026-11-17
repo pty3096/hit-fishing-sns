@@ -466,3 +466,27 @@ test('community text posts stay separate from catches and share editing, photos,
  const page=(await request(app,'GET','/api/posts?kind=community')).body;assert.equal(page.posts.length,20);assert.ok(page.next);
  const next=(await request(app,'GET','/api/posts?kind=community&before='+page.next)).body;assert.equal(next.posts.length,2);assert.ok(!next.posts.some(p=>page.posts.some(first=>first.id===p.id)));
 });
+
+test('popular rankings use bounded registration windows and real likes with deterministic ties and visibility',async t=>{
+ const folder=mkdtempSync(join(tmpdir(),'hit-ranking-')),database=join(folder,'app.sqlite');
+ const clock=Date.parse('2026-11-17T12:00:00.000Z'),app=createApp({database,now:()=>clock});t.after(()=>{app.close();rmSync(folder,{recursive:true,force:true});});
+ const a=await request(app,'POST','/api/signup',credentials('rank-author@example.test'));
+ const voters=[];for(let i=0;i<4;i++)voters.push(await request(app,'POST','/api/signup',credentials('rank-voter-'+i+'@example.test')));
+ const specs=[['recent',1,2],['tie-newer',1,2],['edge-seven',7,1],['outside-seven',7+1/86400000,1],['month',20,3],['old',45,4],['future',-1,4],['zero',1,0]];
+ const records=[];
+ for(const [title,days,likes] of specs){const p=(await request(app,'POST','/api/posts',{...post,title},a.cookie)).body.post;records.push({...p,days,likes});for(let i=0;i<likes;i++)assert.equal((await request(app,'PUT','/api/posts/'+p.id+'/like',{},voters[i].cookie)).status,200);}
+ const community=(await request(app,'POST','/api/posts',{kind:'community',title:'community',body:'커뮤니티는 조황 랭킹에서 제외'},a.cookie)).body.post;
+ await request(app,'PUT','/api/posts/'+community.id+'/like',{},voters[0].cookie);
+ const db=new DatabaseSync(database);for(const p of records)db.prepare('UPDATE posts SET created_at=? WHERE id=?').run(new Date(clock-p.days*86400000).toISOString(),p.id);db.prepare('UPDATE posts SET created_at=? WHERE id=?').run(new Date(clock).toISOString(),community.id);db.close();
+ const rank=async(period,cookie)=>request(app,'GET','/api/rankings?period='+period,undefined,cookie);
+ let result=await rank('7');assert.equal(result.status,200);assert.deepEqual(result.body.posts.map(p=>p.title),['tie-newer','recent','edge-seven']);assert.equal(result.body.generated_at,new Date(clock).toISOString());assert.equal(result.body.posts[0].ranking_likes,2);
+ assert.deepEqual((await rank('30')).body.posts.map(p=>p.title),['month','tie-newer','recent','outside-seven','edge-seven']);
+ assert.equal((await rank('all')).body.posts[0].title,'old');assert.equal((await rank('invalid')).status,400);
+ const hidden=new DatabaseSync(database);hidden.prepare('UPDATE posts SET hidden=1 WHERE id=?').run(records[1].id);hidden.close();assert.ok(!(await rank('7')).body.posts.some(p=>p.id===records[1].id));
+ await request(app,'DELETE','/api/posts/'+records[0].id+'/like',{},voters[1].cookie);assert.equal((await rank('7')).body.posts[0].title,'edge-seven');
+ for(let i=0;i<21;i++){const p=(await request(app,'POST','/api/posts',{...post,title:'limit-'+i},a.cookie)).body.post;const d=new DatabaseSync(database);d.prepare('UPDATE posts SET created_at=? WHERE id=?').run(new Date(clock).toISOString(),p.id);d.close();await request(app,'PUT','/api/posts/'+p.id+'/like',{},voters[0].cookie);}
+ assert.equal((await rank('all')).body.posts.length,20);
+ await request(app,'PUT','/api/blocks/'+a.body.user.id,{},voters[0].cookie);assert.equal((await rank('all',voters[0].cookie)).body.posts.length,0);
+ await request(app,'DELETE','/api/blocks/'+a.body.user.id,{},voters[0].cookie);
+ const suspended=new DatabaseSync(database);suspended.prepare('UPDATE users SET suspended=1 WHERE id=?').run(a.body.user.id);suspended.close();assert.equal((await rank('all')).body.posts.length,0);
+});

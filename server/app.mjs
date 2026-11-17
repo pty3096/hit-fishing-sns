@@ -174,6 +174,15 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         liked: !!(user && db.prepare('SELECT 1 FROM likes WHERE post_id=? AND user_id=?').get(p.id,user.id)),
         comment_count: db.prepare(`SELECT count(*) n FROM comments c WHERE c.post_id=? AND ${mod.visibleSQL('c',user?.id)}`).get(p.id).n });
       const select = 'SELECT p.*,u.nickname FROM posts p JOIN users u ON u.id=p.user_id';
+      if(path==='/api/rankings'&&method==='GET'){
+        const period=url.searchParams.get('period')||'7';
+        if(!['7','30','all'].includes(period))fail(400,'집계 기간을 확인해주세요.');
+        const timestamp=now(),generatedAt=new Date(timestamp).toISOString();
+        const clauses=["p.kind='catch'",mod.visibleSQL('p',user?.id),'p.created_at<=?'],values=[generatedAt];
+        if(period!=='all'){clauses.push('p.created_at>=?');values.push(new Date(timestamp-Number(period)*86400000).toISOString());}
+        const rows=db.prepare('SELECT p.*,u.nickname,l.ranking_likes FROM posts p JOIN users u ON u.id=p.user_id JOIN (SELECT post_id,count(*) ranking_likes FROM likes GROUP BY post_id) l ON l.post_id=p.id WHERE '+clauses.join(' AND ')+' ORDER BY l.ranking_likes DESC,p.id DESC LIMIT 20').all(...values);
+        return send(200,{period,generated_at:generatedAt,posts:rows.map(decorate)});
+      }
       const photoMatch = path.match(/^\/api\/photos\/([a-f0-9]{32})$/);
       if (photoMatch && method === 'GET') {
         const photo = db.prepare('SELECT data,post_id FROM photos WHERE id=?').get(photoMatch[1]);

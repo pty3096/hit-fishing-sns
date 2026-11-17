@@ -10,6 +10,7 @@ export function searchPath(params) {
 export function navigationSection(route) {
   if(['home','following'].includes(route)||route.startsWith('post/'))return 'home';
   if(route==='community'||route==='community-write')return 'community';
+  if(route==='ranking')return 'ranking';
   if(route==='search')return 'search';
   if(route==='write'||route.startsWith('edit/'))return 'write';
   return 'profile';
