@@ -300,3 +300,33 @@ test('post retry after lost response is persistent, scoped, atomic and cannot re
  assert.equal((await request(app,'POST','/api/posts',data,a.cookie)).status,409);
  assert.equal((await request(app,'POST','/api/posts',data)).status,401);
 });
+
+test('comment retries survive restart, scope accounts and posts, retain deletion tombstones and respect moderation',async t=>{
+ const folder=mkdtempSync(join(tmpdir(),'hit-comment-retry-')),database=join(folder,'app.sqlite');let app=createApp({database});
+ t.after(()=>{app.close();rmSync(folder,{recursive:true,force:true});});
+ const a=await request(app,'POST','/api/signup',credentials('comment-retry@example.test'));
+ const b=await request(app,'POST','/api/signup',credentials('comment-retry-b@example.test'));
+ const p=(await request(app,'POST','/api/posts',post,a.cookie)).body.post;
+ const second=(await request(app,'POST','/api/posts',post,a.cookie)).body.post;
+ const path='/api/posts/'+p.id+'/comments',data={body:'한 수 축하해요!',request_id:'c'.repeat(32)};
+ const first=await request(app,'POST',path,data,a.cookie);assert.equal(first.status,201);
+ app.close();app=createApp({database});
+ const retry=await request(app,'POST',path,data,a.cookie);assert.equal(retry.status,200);assert.equal(retry.body.id,first.body.id);
+ assert.equal((await request(app,'GET',path)).body.comments.length,1);
+ assert.equal((await request(app,'POST',path,{...data,body:'다른 댓글'},a.cookie)).status,409);
+ assert.equal((await request(app,'POST','/api/posts/'+second.id+'/comments',data,a.cookie)).status,409);
+ assert.equal((await request(app,'POST',path,{...data,request_id:'bad'},a.cookie)).status,400);
+ assert.equal((await request(app,'POST',path,data)).status,401);
+ assert.equal((await request(app,'POST',path,data,b.cookie)).status,201);
+ const parallel={body:'동시 재시도',request_id:'d'.repeat(32)};
+ const both=await Promise.all([request(app,'POST',path,parallel,a.cookie),request(app,'POST',path,parallel,a.cookie)]);
+ assert.deepEqual(both.map(r=>r.status).sort(),[200,201]);assert.equal(both[0].body.id,both[1].body.id);
+ let db=new DatabaseSync(database);db.prepare('UPDATE comments SET hidden=1 WHERE id=?').run(first.body.id);db.close();
+ assert.equal((await request(app,'POST',path,data,a.cookie)).status,409);
+ await request(app,'DELETE','/api/comments/'+first.body.id,{},a.cookie);
+ assert.equal((await request(app,'POST',path,data,a.cookie)).status,409);
+ assert.equal((await request(app,'PUT','/api/blocks/'+a.body.user.id,{},b.cookie)).status,200);
+ assert.equal((await request(app,'POST',path,data,b.cookie)).status,404);
+ const withdrawn=await request(app,'DELETE','/api/account',{password:credentials('').password,confirm:'탈퇴'},b.cookie);assert.equal(withdrawn.status,200);
+ db=new DatabaseSync(database);assert.equal(db.prepare('SELECT count(*) n FROM comment_requests WHERE user_id=?').get(b.body.user.id).n,0);db.close();
+});

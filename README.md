@@ -13,6 +13,8 @@ Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 
 
 ## 자료
 
+- [댓글 전송 재시도](docs/19_COMMENT_RETRIES.md)
+
 - [연결 오류 후 조황 등록 재시도](docs/18_POST_RETRIES.md)
 
 - [아이폰용 보호된 시범 접속](docs/17_IPHONE_PREVIEW.md)

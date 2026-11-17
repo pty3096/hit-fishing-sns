@@ -168,10 +168,22 @@ async function render({focus=false}={}) {
         const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); if(stillHere()||JSON.stringify(drafts.read(owner,key))===JSON.stringify(draftFields(data)))drafts.remove(owner,key);if(stillHere()){editor=null;location.hash='post/'+post.id;}toast('조황을 저장했습니다.'); });
     } else if (/^post\/\d+$/.test(route)) {
       const { post: p } = await api('/posts/' + route.split('/')[1]); if (current !== generation) return;
-      main.innerHTML = `<a class="back" href="#home">← 피드로</a><article class="card"><div class="eyebrow">FISHING JOURNAL</div><h1>${esc(p.title)}</h1><p class="muted"><a href="#user/${p.user_id}">${esc(p.nickname)}</a> · ${esc(p.fishing_date)}</p>${photoGallery(p)}<p><span class="tag">${esc(p.region)}</span><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><p class="content">${esc(p.body)}</p>${me?.id === p.user_id ? `<div class="actions"><a href="#edit/${p.id}">수정</a><button id="delete-post">삭제</button></div><div id="confirm-delete" hidden><p>이 조황을 삭제할까요? 삭제 후 복구할 수 없습니다.</p><button id="delete-yes">삭제하기</button><button id="delete-no">취소</button><p class="error" role="alert" hidden></p></div>` : ''}</article><section class="card"><div class="actions">${likeButton(p)}<a href="#user/${p.user_id}">작성자 프로필 →</a>${me?.id!==p.user_id ? `<a href="#report/post/${p.id}">게시물 신고</a>` : ''}</div></section><section class="card"><h2>이야기를 나눠요</h2>${canWrite(me,meta)?`<form id="comment-form" class="form"><label for="comment">댓글</label><textarea id="comment" name="body" maxlength="300" required placeholder="따뜻한 한마디를 남겨주세요"></textarea>${formError}<button class="primary" type="submit">댓글 등록</button></form>`:`<p class="muted">${!me?'로그인하고 이야기를 나눠보세요.':me.suspended?'이용 제한 상태에서는 댓글을 남길 수 없습니다.':'이메일 인증 후 댓글을 남길 수 있어요.'}</p><a class="primary" href="${me?'#settings':'#login'}" data-login-return="${esc(route)}">${me?'계정 설정 확인':'로그인하기 →'}</a>`}<div id="comments"></div></section>`;
+      main.innerHTML = `<a class="back" href="#home">← 피드로</a><article class="card"><div class="eyebrow">FISHING JOURNAL</div><h1>${esc(p.title)}</h1><p class="muted"><a href="#user/${p.user_id}">${esc(p.nickname)}</a> · ${esc(p.fishing_date)}</p>${photoGallery(p)}<p><span class="tag">${esc(p.region)}</span><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><p class="content">${esc(p.body)}</p>${me?.id === p.user_id ? `<div class="actions"><a href="#edit/${p.id}">수정</a><button id="delete-post">삭제</button></div><div id="confirm-delete" hidden><p>이 조황을 삭제할까요? 삭제 후 복구할 수 없습니다.</p><button id="delete-yes">삭제하기</button><button id="delete-no">취소</button><p class="error" role="alert" hidden></p></div>` : ''}</article><section class="card"><div class="actions">${likeButton(p)}<a href="#user/${p.user_id}">작성자 프로필 →</a>${me?.id!==p.user_id ? `<a href="#report/post/${p.id}">게시물 신고</a>` : ''}</div></section><section class="card"><h2>이야기를 나눠요</h2>${canWrite(me,meta)?`<form id="comment-form" class="form"><p class="field-help">전송에 실패하면 이 화면에서 다시 시도해주세요. 화면을 다시 열었다면 댓글 목록에서 등록 여부를 먼저 확인해주세요.</p><label for="comment">댓글</label><textarea id="comment" name="body" maxlength="300" required placeholder="따뜻한 한마디를 남겨주세요"></textarea>${formError}<button class="primary" type="submit">댓글 등록</button></form>`:`<p class="muted">${!me?'로그인하고 이야기를 나눠보세요.':me.suspended?'이용 제한 상태에서는 댓글을 남길 수 없습니다.':'이메일 인증 후 댓글을 남길 수 있어요.'}</p><a class="primary" href="${me?'#settings':'#login'}" data-login-return="${esc(route)}">${me?'계정 설정 확인':'로그인하기 →'}</a>`}<div id="comments"></div></section>`;
       await loadComments(p.id);
       if (current !== generation) return;
-      formAction('comment-form',async(data,stillHere)=>{ if (!guardWrite(route)) return; await api('/posts/' + p.id + '/comments','POST',data); if(stillHere()){const field=document.querySelector('#comment');if(field)field.value='';await loadComments(p.id);} toast('댓글을 남겼습니다.'); });
+      let lastCommentText=null,commentRequestId=null;
+      formAction('comment-form',async(data,stillHere)=>{
+        if(!guardWrite(route))return;
+        const content=data.body.trim(),field=document.querySelector('#comment');
+        if(content!==lastCommentText){lastCommentText=content;commentRequestId=crypto.randomUUID().replaceAll('-','');}
+        data.request_id=commentRequestId;field.readOnly=true;
+        try{
+          await api('/posts/'+p.id+'/comments','POST',data);
+          lastCommentText=null;commentRequestId=null;
+          if(stillHere()){if(field.value===data.body)field.value='';await loadComments(p.id);}
+          toast('댓글을 남겼습니다.');
+        }finally{field.readOnly=false;}
+      });
       if (me?.id === p.user_id) {
         const panel = document.querySelector('#confirm-delete');
         document.querySelector('#delete-post').onclick = () => { panel.hidden = false; };

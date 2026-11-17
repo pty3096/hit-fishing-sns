@@ -45,6 +45,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
   const emailService = emailAuth(db,{origin,...mail,now});
   db.exec(`CREATE TABLE IF NOT EXISTS avatars(user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,revision TEXT NOT NULL,data BLOB NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL); PRAGMA user_version=5;`);
   db.exec(`CREATE TABLE IF NOT EXISTS post_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,post_id INTEGER REFERENCES posts(id) ON DELETE SET NULL,PRIMARY KEY(user_id,request_id)); PRAGMA user_version=6;`);
+  db.exec(`CREATE TABLE IF NOT EXISTS comment_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,comment_id INTEGER REFERENCES comments(id) ON DELETE SET NULL,PRIMARY KEY(user_id,request_id)); PRAGMA user_version=7;`);
   const avatarURL=id=>{const row=db.prepare('SELECT revision FROM avatars WHERE user_id=?').get(id);return row?`/api/avatars/${id}/${row.revision}`:null;};
   const publicUser=u=>u?{...baseUser(u),avatar_url:avatarURL(u.id)}:null;
   const limits = new Map();
@@ -211,8 +212,25 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         }
         if (action === 'comments' && method === 'POST') {
           auth(); const content = text(body.body,300,'댓글');
-          const r = db.prepare('INSERT INTO comments(post_id,user_id,body,created_at) VALUES(?,?,?,?)').run(postId,user.id,content,new Date().toISOString());
-          return send(201, { id: Number(r.lastInsertRowid) });
+          const requestId=body.request_id;
+          if(requestId!==undefined&&(typeof requestId!=='string'||!/^[a-f0-9]{32}$/.test(requestId)))fail(400,'댓글 요청 정보를 확인해주세요.');
+          const fingerprint=requestId?digest(JSON.stringify({postId,content})):null;
+          db.exec('BEGIN IMMEDIATE');
+          let commentId,replayed=false;
+          try {
+            const previous=requestId&&db.prepare('SELECT * FROM comment_requests WHERE user_id=? AND request_id=?').get(user.id,requestId);
+            if(previous){
+              if(previous.fingerprint!==fingerprint)fail(409,'댓글 내용이나 게시물이 바뀌었습니다. 새 요청으로 다시 시도해주세요.');
+              const comment=previous.comment_id&&db.prepare('SELECT id,hidden FROM comments WHERE id=?').get(previous.comment_id);
+              if(!comment||comment.hidden)fail(409,'이미 처리된 댓글 요청입니다. 댓글 목록을 확인해주세요.');
+              commentId=comment.id;replayed=true;
+            }else{
+              commentId=Number(db.prepare('INSERT INTO comments(post_id,user_id,body,created_at) VALUES(?,?,?,?)').run(postId,user.id,content,new Date().toISOString()).lastInsertRowid);
+              if(requestId)db.prepare('INSERT INTO comment_requests VALUES(?,?,?,?)').run(user.id,requestId,fingerprint,commentId);
+            }
+            db.exec('COMMIT');
+          }catch(err){db.exec('ROLLBACK');throw err;}
+          return send(replayed?200:201,{id:commentId,...(replayed?{replayed:true}:{})});
         }
       }
       const commentMatch = path.match(/^\/api\/comments\/(\d+)$/);
