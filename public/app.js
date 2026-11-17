@@ -36,7 +36,7 @@ function formAction(id, action) {
   };
 }
 const icon=name=>`<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
-const upcoming={shorts:'숏폼',community:'커뮤니티',creators:'크리에이터',map:'포인트지도',booking:'선상예약',market:'장터',notifications:'알림',ranking:'랭킹',saved:'저장한 조황'};
+const upcoming={shorts:'숏폼',community:'커뮤니티',map:'포인트지도',booking:'선상예약',market:'장터',notifications:'알림',ranking:'랭킹',saved:'저장한 조황'};
 function quickLinks(){return `<div class="quick-grid">${[['feed','feed','조황피드'],['coming/shorts','play','숏폼영상'],['coming/map','map','낚시지도'],['coming/booking','calendar','출조예약'],['coming/community','users','커뮤니티'],['coming/ranking','users','랭킹']].map(([href,symbol,label])=>`<a href="#${href}" class="quick-tile">${icon(symbol)}<strong>${label}</strong>${href.startsWith('coming')?'<small>준비 중</small>':''}</a>`).join('')}</div>`;}
 function discovery(posts){
  const authors=[...new Map(posts.map(p=>[p.user_id,p])).values()].slice(0,3);
@@ -92,7 +92,7 @@ async function render({focus=false}={}) {
         document.querySelector('#reset-search').onclick=()=>{if(location.hash==='#search')render();else location.hash='search';};
       }
     } else if(route.startsWith('coming/')){
-      const label=upcoming[route.split('/')[1]]||'새로운 기능';
+      const label=upcoming[route.split('/')[1]];if(!label)throw new Error('페이지를 찾을 수 없습니다.');
       main.innerHTML=`<section class="card coming-soon"><div class="coming-icon">${icon('calendar')}</div><p class="eyebrow">COMING SOON</p><h1>${esc(label)} 준비 중입니다.</h1><p class="muted">더 즐거운 낚시를 위한 공간을 준비하고 있어요.<br>지금은 조황을 기록하고 낚시인들과 이야기를 나눠보세요.</p><a class="primary" href="#feed">조황피드 둘러보기</a></section>`;
     } else if (route === 'login' || route === 'signup') {
       const signup = route === 'signup';
