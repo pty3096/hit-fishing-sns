@@ -1,4 +1,7 @@
 import http from 'node:http';
+import {isIP} from 'node:net';
+import {emailAuth} from './email-auth.mjs';
+import {readConfig} from './config.mjs';
 import {moderation} from './moderation.mjs';
 import { normalizePhotos, MAX_POST_BYTES } from './photos.mjs';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,9 +19,12 @@ const text = (value, max, label) => {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > max) fail(400, `${label}을 확인해주세요.`);
   return value.trim();
 };
-const publicUser = u => u ? { id: u.id, nickname: u.nickname, bio: u.bio, is_admin: !!u.is_admin, suspended: !!u.suspended } : null;
+const publicUser = u => u ? { id: u.id, nickname: u.nickname, bio: u.bio, is_admin: !!u.is_admin, suspended: !!u.suspended, email_verified: !!u.email_verified } : null;
 
-export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin = 'http://127.0.0.1:3000', secure = false } = {}) {
+export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin = 'http://127.0.0.1:3000', secure = false, requireVerified = true, mail = {localMailbox:true}, now = Date.now, production = false, trustProxy = false } = {}) {
+  if(mail.localMailbox&&!['127.0.0.1','localhost','[::1]'].includes(new URL(origin).hostname))throw new Error('Development mail is restricted to local origins.');
+  if(!mail.localMailbox&&typeof mail.sendMail!=='function')throw new Error('A mail sender is required.');
+  if(production&&(!secure||!origin.startsWith('https:')||mail.localMailbox||!requireVerified))throw new Error('Production requires HTTPS, SMTP mail and verification enforcement.');
   if (database !== ':memory:') mkdirSync(dirname(database), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(database);
   db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
@@ -36,6 +42,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
     CREATE INDEX IF NOT EXISTS follows_target ON follows(target_id,id);
     PRAGMA user_version=2;`);
   const mod = moderation(db);
+  const emailService = emailAuth(db,{origin,...mail,now});
   const limits = new Map();
   const cookie = token => `hit_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${token ? 604800 : 0}${secure ? '; Secure' : ''}`;
   const sessionUser = req => {
@@ -45,12 +52,18 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
   };
   async function handle(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'same-origin');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Cache-Control', 'no-store');
+    if(secure)res.setHeader('Strict-Transport-Security','max-age=31536000');
     const send = (status, data) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(data)); };
     try {
+      req.clientAddress=req.socket.remoteAddress||'local';
+      if(trustProxy&&typeof req.headers['x-forwarded-for']==='string'){const address=req.headers['x-forwarded-for'].split(',').at(-1).trim();if(isIP(address))req.clientAddress=address;}
       const url = new URL(req.url, origin), path = url.pathname, method = req.method;
+      if(mail.localMailbox && req.headers.host && req.headers.host.toLowerCase()!==new URL(origin).host.toLowerCase())fail(403,'허용되지 않은 접속 주소입니다.');
+      if(path==='/api/health'&&method==='GET'){db.prepare('SELECT 1').get();return send(200,{status:'ok'});}
+      if(path==='/api/meta'&&method==='GET')return send(200,{development_mail:!!mail.localMailbox,verification_required:requireVerified,production});
       if (!path.startsWith('/api/')) {
         if (method !== 'GET') fail(405, '지원하지 않는 요청입니다.');
         const file = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] }[path];
@@ -59,7 +72,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         res.end(readFileSync(resolve(root, 'public', file[0]))); return;
       }
       const user = sessionUser(req);
-      const auth = () => { const current=user && db.prepare('SELECT * FROM users WHERE id=?').get(user.id); if (!current) fail(401, '로그인이 필요합니다.'); if(current.suspended)fail(403,'이용이 제한된 계정입니다.'); return current; };
+      const auth = () => { const current=user && sessionUser(req); if (!current) fail(401, '로그인이 필요합니다.'); if(current.suspended)fail(403,'이용이 제한된 계정입니다.'); if(requireVerified&&!current.email_verified)fail(403,'이메일 인증 후 이용해주세요. 설정에서 인증 안내를 확인할 수 있습니다.'); return current; };
       let body = {};
       if (!['GET', 'HEAD'].includes(method)) {
         if (req.headers.origin !== origin) fail(403, '허용되지 않은 요청 출처입니다.');
@@ -76,12 +89,15 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       const verifyPassword = async (account,password) => {
         if(typeof password!=='string'||password.length>128)return false;
         const candidate=await derive(password,account.salt,64);
+        const current=sessionUser(req);
+        if(!current||current.id!==account.id||current.password_hash!==account.password_hash)return false;
         return timingSafeEqual(candidate,Buffer.from(account.password_hash,'hex'));
       };
+      if(await emailService.route({path,method,body,user,req,res,send}))return;
       if(await mod.route({path,method,body,user,auth,send,req,res,verifyPassword}))return;
       if (path === '/api/me' && method === 'GET') return send(200, { user: publicUser(user) });
       if (['/api/signup', '/api/login'].includes(path) && method === 'POST') {
-        const key = req.socket.remoteAddress || 'local', now = Date.now();
+        const key = req.clientAddress, now = Date.now();
         for (const [k, v] of limits) if (v.until < now) limits.delete(k);
         const limit = limits.get(key) || { count: 0, until: now + 600000 };
         if (++limit.count > 20) fail(429, '잠시 후 다시 시도해주세요.'); limits.set(key, limit);
@@ -100,8 +116,10 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
           const candidate = await derive(body.password, account?.salt || 'dummy-salt-for-missing-account', 64);
           if (!account || !timingSafeEqual(candidate, Buffer.from(account.password_hash, 'hex'))) fail(401, '이메일 또는 비밀번호를 확인해주세요.');
         }
+        const checkedHash=account.password_hash;
         account=db.prepare('SELECT * FROM users WHERE id=?').get(account.id);
-        if(!account)fail(401,'계정이 없습니다.');
+        if(!account||account.password_hash!==checkedHash)fail(401,'이메일 또는 비밀번호를 확인해주세요.');
+        if(path==='/api/signup')emailService.issue(account,'verify');
         const token = randomBytes(32).toString('hex');
         db.prepare('DELETE FROM sessions WHERE expires<=?').run(Date.now());
         const old = (req.headers.cookie || '').match(/(?:^|;\s*)hit_session=([a-f0-9]{64})(?:;|$)/)?.[1];
@@ -239,15 +257,15 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       fail(404, '요청한 기능이 없습니다.');
     } catch (err) { if (!err.status) console.error('Request failed:', err.code || err.name); send(err.status || 500, { error: err.status ? err.message : '처리 중 문제가 생겼습니다. 다시 시도해주세요.' }); }
   }
-  return { handle, close: () => db.close() };
+  return { handle, close: () => db.close(), drainMail:emailService.drain };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const port = Number(process.env.PORT || 3000), origin = `http://127.0.0.1:${port}`;
-  const app = createApp({ database: process.env.HIT_DB || resolve(root, 'data/hit.sqlite'), origin });
-  const server = http.createServer(app.handle);
-  server.requestTimeout = 15000; server.headersTimeout = 10000;
-  server.listen(port, '127.0.0.1', () => console.log(`HIT local development: ${origin}`));
-  const stop = () => server.close(() => { app.close(); process.exit(0); });
-  process.on('SIGINT', stop); process.on('SIGTERM', stop);
+  const config=readConfig();
+  const app=createApp(config);
+  const server=http.createServer(app.handle);
+  server.requestTimeout=120000;server.headersTimeout=10000;
+  server.listen(config.port,config.host,()=>console.log(`HIT ${config.production?'production':'local development'}: ${config.origin}`));
+  const stop=()=>server.close(async()=>{await app.drainMail();app.close();process.exit(0);});
+  process.on('SIGINT',stop);process.on('SIGTERM',stop);
 }

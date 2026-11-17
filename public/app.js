@@ -1,4 +1,5 @@
 const main = document.querySelector('#main');
+let meta = {development_mail:false,verification_required:true,production:false};
 let me = null, returnTo = 'profile', generation = 0;
 let previewUrls = [];
 const cleanupPreviews = () => { previewUrls.forEach(url => URL.revokeObjectURL(url)); previewUrls = []; };
@@ -43,8 +44,11 @@ async function render() {
   cleanupPreviews();
   main.innerHTML = '<section class="card" role="status">기록을 불러오고 있어요…</section>';
   try {
-    me = (await api('/me')).user;
+    const [session,configuration]=await Promise.all([api('/me'),api('/meta')]);
+    me=session.user;meta=configuration;
     if (current !== generation) return;
+    document.querySelector('.notice').textContent=meta.production?'히트 HIT · 낚시의 순간을 함께':'개발 버전 · 이 PC에 기록을 저장합니다 · 메일 발송 연결 전 로컬 검증';
+    const authStatus=document.querySelector('#auth-status');authStatus.hidden=!me||me.email_verified||!meta.verification_required;authStatus.innerHTML='이메일 인증을 완료하면 글 작성과 소통 기능을 이용할 수 있어요. <a href="#settings">인증 안내 →</a>';
     const account = document.querySelector('#account'); account.textContent = me ? `${me.nickname} →` : '로그인 →'; account.href = me ? '#profile' : '#login';
     document.querySelectorAll('.navlink,.bottom a').forEach(a => a.classList.toggle('active', a.hash === '#' + route));
     if (['home','following','search'].includes(route)) {
@@ -59,8 +63,25 @@ async function render() {
       }
     } else if (route === 'login' || route === 'signup') {
       const signup = route === 'signup';
-      main.innerHTML = `<section class="card"><span class="eyebrow">WELCOME TO HIT</span><h1>${signup ? '첫 기록을 시작해요.' : '다시 만나 반가워요.'}</h1><p class="muted">로컬 개발용 계정입니다. 이메일 인증·비밀번호 재설정은 아직 제공하지 않습니다.</p><form id="auth" class="form">${signup ? '<label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="30" autocomplete="nickname" required>' : ''}<label for="email">이메일</label><input id="email" name="email" type="email" maxlength="254" autocomplete="username" required><label for="password">비밀번호 (12~128자)</label><input id="password" name="password" type="password" minlength="12" maxlength="128" autocomplete="${signup ? 'new-password' : 'current-password'}" required>${formError}<button class="primary" type="submit">${signup ? '회원가입' : '로그인'}</button></form><p><a href="#${signup ? 'login' : 'signup'}">${signup ? '이미 계정이 있어요 →' : '처음이신가요? 회원가입 →'}</a></p></section>`;
-      formAction('auth', async data => { me = (await api(signup ? '/signup' : '/login', 'POST', data)).user; location.hash = me.suspended ? 'settings' : returnTo; toast(signup ? '가입했습니다. 첫 조황을 남겨보세요.' : '로그인했습니다.'); });
+      main.innerHTML = `<section class="card"><span class="eyebrow">WELCOME TO HIT</span><h1>${signup ? '첫 기록을 시작해요.' : '다시 만나 반가워요.'}</h1><p class="muted">${meta.development_mail?'개발용 메일함에서 인증·재설정 안내를 확인할 수 있습니다.':'가입한 이메일로 인증·재설정 안내를 보내드립니다.'}</p><form id="auth" class="form">${signup ? '<label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="30" autocomplete="nickname" required>' : ''}<label for="email">이메일</label><input id="email" name="email" type="email" maxlength="254" autocomplete="username" required><label for="password">비밀번호 (12~128자)</label><input id="password" name="password" type="password" minlength="12" maxlength="128" autocomplete="${signup ? 'new-password' : 'current-password'}" required>${formError}<button class="primary" type="submit">${signup ? '회원가입' : '로그인'}</button></form><p><a href="#${signup ? 'login' : 'signup'}">${signup ? '이미 계정이 있어요 →' : '처음이신가요? 회원가입 →'}</a></p>${!signup?'<p><a href="#forgot">비밀번호를 잊으셨나요? →</a></p>':''}</section>`;
+      formAction('auth', async data => { me = (await api(signup ? '/signup' : '/login', 'POST', data)).user; location.hash = me.suspended||!me.email_verified ? 'settings' : returnTo; toast(signup ? '가입했습니다. 첫 조황을 남겨보세요.' : '로그인했습니다.'); });
+    } else if (route === 'forgot') {
+      main.innerHTML=`<a href="#login" class="back">← 로그인</a><h1>비밀번호 찾기</h1><form id="forgot-form" class="card form"><p>가입한 이메일을 입력해주세요.</p><label for="email">이메일</label><input id="email" name="email" type="email" maxlength="254" autocomplete="email" required>${formError}<button type="submit" class="primary">재설정 안내 받기</button></form>`;
+      formAction('forgot-form',async data=>{const result=await api('/password/forgot','POST',data);main.innerHTML=`<section class="card"><h1>메일함을 확인해주세요.</h1><p>${esc(result.message)}</p>${meta.development_mail?`<p class="muted">로컬 검증에서는 로그인한 계정의 <a href="#mailbox">개발용 메일함</a> 또는 이 PC의 메일함 확인 명령을 사용합니다.</p>`:''}<a href="#login">로그인으로 →</a></section>`;});
+    } else if (/^verify\/[a-f0-9]{64}$/.test(route)) {
+      const token=route.split('/')[1];
+      main.innerHTML=`<h1>이메일 인증</h1><form id="verify-form" class="card form"><p>아래 버튼을 누르면 이메일 인증이 완료됩니다.</p>${formError}<button type="submit" class="primary">이메일 인증 완료하기</button></form>`;
+      formAction('verify-form',async()=>{await api('/email/verify','POST',{token});history.replaceState(null,'',me?'#settings':'#login');toast('이메일 인증을 완료했습니다.');render();});
+    } else if (/^reset\/[a-f0-9]{64}$/.test(route)) {
+      const token=route.split('/')[1];
+      main.innerHTML=`<h1>새 비밀번호 설정</h1><form id="reset-form" class="card form"><p>변경하면 모든 기기의 기존 로그인이 종료됩니다.</p><label for="password">새 비밀번호 (12~128자)</label><input id="password" name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><label for="password-confirm">새 비밀번호 확인</label><input id="password-confirm" name="confirm" type="password" minlength="12" maxlength="128" autocomplete="new-password" required>${formError}<button type="submit" class="primary">비밀번호 변경</button></form>`;
+      formAction('reset-form',async data=>{if(data.password!==data.confirm)throw new Error('두 비밀번호가 일치하지 않습니다.');await api('/password/reset','POST',{token,password:data.password});me=null;history.replaceState(null,'','#login');toast('비밀번호를 변경했습니다. 다시 로그인해주세요.');render();});
+    } else if (route === 'mailbox') {
+      if(!guard(route))return;
+      if(!meta.development_mail)throw new Error('개발용 메일함은 로컬 검증에서만 사용할 수 있습니다.');
+      const data=await api('/dev/mail');if(current!==generation)return;
+      main.innerHTML=`<a href="#settings" class="back">← 설정</a><h1>개발용 메일함</h1><p class="muted">실제 이메일 발송 없이 본인 계정의 링크를 확인하는 화면입니다.</p><button id="refresh-mail">새로 확인</button><div>${data.messages.map(m=>`<article class="card"><h2>${esc(m.subject)}</h2><p class="muted">유효 시간: ${esc(new Date(m.expires).toLocaleString('ko-KR'))}까지</p><a class="primary" href="${esc(m.link)}">안내 열기 →</a></article>`).join('')||'<section class="card">아직 안내가 없거나 이미 사용한 링크입니다. 설정에서 새 인증 안내를 요청할 수 있습니다.</section>'}</div>`;
+      document.querySelector('#refresh-mail').onclick=render;
     } else if (route === 'write' || /^edit\/\d+$/.test(route)) {
       if (!guard(route)) return;
       const id = route.startsWith('edit/') ? route.split('/')[1] : null;
@@ -136,7 +157,8 @@ async function render() {
       formAction('report-form',async data=>{await api('/reports','POST',{...data,target_type:type,target_id:Number(id)}); main.innerHTML='<section class="card"><h1>신고를 접수했습니다.</h1><p>운영자가 확인하겠습니다.</p><a href="#home">홈으로 →</a></section>';});
     } else if (route === 'settings') {
       if(!guard(route))return;
-      main.innerHTML=`<h1>내 계정 설정</h1><section class="card">${me.suspended?'<p class="error">이용이 제한된 계정입니다. 글 작성과 소통 기능을 사용할 수 없습니다. 탈퇴는 가능합니다.</p>':''}<p><a href="#profile">내 프로필 →</a></p>${me.is_admin?'<p><a href="#admin">운영자 신고 관리 →</a></p>':''}<h2>차단한 사용자</h2><div id="blocked-users"></div></section><section class="card"><h2>회원 탈퇴</h2><p>계정, 조황·사진, 댓글, 좋아요, 팔로우·차단 관계와 모든 로그인 세션을 삭제합니다. 접수된 신고·운영 기록은 일부 익명화하여 남습니다.</p><p>이 작업은 되돌릴 수 없습니다. 개발 백업 파일은 별도로 관리됩니다.</p><form id="withdraw" class="form"><label for="withdraw-password">현재 비밀번호</label><input id="withdraw-password" type="password" name="password" autocomplete="current-password" required maxlength="128"><label for="withdraw-confirm">확인을 위해 탈퇴를 입력해주세요</label><input id="withdraw-confirm" name="confirm" required autocomplete="off" pattern="탈퇴">${formError}<button type="submit" class="danger-button">계정과 작성 자료 삭제</button></form></section>`;
+      main.innerHTML=`<h1>내 계정 설정</h1><section class="card"><h2>이메일 인증</h2><p>${me.email_verified?'인증을 완료했습니다.':'이메일 인증이 필요합니다.'}</p>${!me.email_verified?'<button id="resend-email">인증 안내 다시 받기</button>':''}${meta.development_mail?'<p><a href="#mailbox">개발용 메일함 열기 →</a></p>':''}<p><a href="#forgot">비밀번호 재설정 안내 받기 →</a></p></section><section class="card">${me.suspended?'<p class="error">이용이 제한된 계정입니다. 글 작성과 소통 기능을 사용할 수 없습니다. 탈퇴는 가능합니다.</p>':''}<p><a href="#profile">내 프로필 →</a></p>${me.is_admin?'<p><a href="#admin">운영자 신고 관리 →</a></p>':''}<h2>차단한 사용자</h2><div id="blocked-users"></div></section><section class="card"><h2>회원 탈퇴</h2><p>계정, 조황·사진, 댓글, 좋아요, 팔로우·차단 관계와 모든 로그인 세션을 삭제합니다. 접수된 신고·운영 기록은 일부 익명화하여 남습니다.</p><p>이 작업은 되돌릴 수 없습니다. 개발 백업 파일은 별도로 관리됩니다.</p><form id="withdraw" class="form"><label for="withdraw-password">현재 비밀번호</label><input id="withdraw-password" type="password" name="password" autocomplete="current-password" required maxlength="128"><label for="withdraw-confirm">확인을 위해 탈퇴를 입력해주세요</label><input id="withdraw-confirm" name="confirm" required autocomplete="off" pattern="탈퇴">${formError}<button type="submit" class="danger-button">계정과 작성 자료 삭제</button></form></section>`;
+      const resend=document.querySelector('#resend-email');if(resend)resend.onclick=async()=>{resend.disabled=true;try{const r=await api('/email/resend','POST',{});toast(r.message);}catch(e){toast(e.message);}finally{resend.disabled=false;}};
       await loadBlocked();
       if(current!==generation)return;
       formAction('withdraw',async data=>{await api('/account','DELETE',data);me=null;returnTo='profile';location.hash='home';toast('계정과 작성 자료를 삭제했습니다.');});
