@@ -29,3 +29,9 @@ export async function normalizePhotos(photos) {
     return normalized;
   } finally { processing--; }
 }
+
+export async function normalizeAvatar(photo) {
+  const [image]=await normalizePhotos([photo]);
+  const {data,info}=await sharp(image.data).resize(512,512,{fit:'cover',position:'centre'}).webp({quality:85}).toBuffer({resolveWithObject:true});
+  return {data,width:info.width,height:info.height};
+}

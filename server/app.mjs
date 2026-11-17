@@ -3,7 +3,7 @@ import {isIP} from 'node:net';
 import {emailAuth} from './email-auth.mjs';
 import {readConfig} from './config.mjs';
 import {moderation} from './moderation.mjs';
-import { normalizePhotos, MAX_POST_BYTES } from './photos.mjs';
+import { normalizePhotos, normalizeAvatar, MAX_POST_BYTES } from './photos.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -19,7 +19,7 @@ const text = (value, max, label) => {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > max) fail(400, `${label}을 확인해주세요.`);
   return value.trim();
 };
-const publicUser = u => u ? { id: u.id, nickname: u.nickname, bio: u.bio, is_admin: !!u.is_admin, suspended: !!u.suspended, email_verified: !!u.email_verified } : null;
+const baseUser = u => u ? { id: u.id, nickname: u.nickname, bio: u.bio, is_admin: !!u.is_admin, suspended: !!u.suspended, email_verified: !!u.email_verified } : null;
 
 export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin = 'http://127.0.0.1:3000', secure = false, requireVerified = true, mail = {localMailbox:true}, now = Date.now, production = false, trustProxy = false } = {}) {
   if(mail.localMailbox&&!['127.0.0.1','localhost','[::1]'].includes(new URL(origin).hostname))throw new Error('Development mail is restricted to local origins.');
@@ -43,6 +43,9 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
     PRAGMA user_version=2;`);
   const mod = moderation(db);
   const emailService = emailAuth(db,{origin,...mail,now});
+  db.exec(`CREATE TABLE IF NOT EXISTS avatars(user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,revision TEXT NOT NULL,data BLOB NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL); PRAGMA user_version=5;`);
+  const avatarURL=id=>{const row=db.prepare('SELECT revision FROM avatars WHERE user_id=?').get(id);return row?`/api/avatars/${id}/${row.revision}`:null;};
+  const publicUser=u=>u?{...baseUser(u),avatar_url:avatarURL(u.id)}:null;
   const limits = new Map();
   const cookie = token => `hit_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${token ? 604800 : 0}${secure ? '; Secure' : ''}`;
   const sessionUser = req => {
@@ -78,8 +81,9 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if (req.headers.origin !== origin) fail(403, '허용되지 않은 요청 출처입니다.');
         if (!(req.headers['content-type'] || '').startsWith('application/json')) fail(415, 'JSON 요청이 필요합니다.');
         const isPostWrite = (path === '/api/posts' && method === 'POST') || (/^\/api\/posts\/\d+$/.test(path) && method === 'PATCH');
-        if (isPostWrite) auth();
-        const maxBytes = isPostWrite ? MAX_POST_BYTES : 16384;
+        const isAvatarWrite=path==='/api/profile/photo'&&method==='PUT';
+        if (isPostWrite||isAvatarWrite) auth();
+        const maxBytes = isPostWrite ? MAX_POST_BYTES : isAvatarWrite ? 14*1024*1024 : 16384;
         if (Number(req.headers['content-length']) > maxBytes) fail(413, '입력 용량이 너무 큽니다.');
         let size = 0, chunks = [];
         for await (const chunk of req) { size += chunk.length; if (size > maxBytes) fail(413, '입력 용량이 너무 큽니다.'); chunks.push(chunk); }
@@ -132,13 +136,30 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if (token) db.prepare('DELETE FROM sessions WHERE token_hash=?').run(digest(token));
         res.setHeader('Set-Cookie', cookie('')); return send(200, { ok: true });
       }
+      const avatarMatch=path.match(/^\/api\/avatars\/(\d+)\/([a-f0-9]{32})$/);
+      if(avatarMatch&&method==='GET'){
+        const id=Number(avatarMatch[1]);
+        if(!mod.userVisible(id,user))fail(404,'프로필 사진이 없습니다.');
+        const photo=db.prepare('SELECT data FROM avatars WHERE user_id=? AND revision=?').get(id,avatarMatch[2]);
+        if(!photo)fail(404,'프로필 사진이 없습니다.');
+        res.setHeader('Content-Type','image/webp');res.end(Buffer.from(photo.data));return;
+      }
+      if(path==='/api/profile/photo'&&['PUT','DELETE'].includes(method)){
+        auth();
+        if(method==='PUT'){
+          const photo=await normalizeAvatar(body.photo);
+          auth();
+          db.prepare('INSERT INTO avatars VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision,data=excluded.data,width=excluded.width,height=excluded.height').run(user.id,randomBytes(16).toString('hex'),photo.data,photo.width,photo.height);
+        }else db.prepare('DELETE FROM avatars WHERE user_id=?').run(user.id);
+        return send(200,{user:publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(user.id))});
+      }
       if (path === '/api/profile' && method === 'PATCH') {
         auth(); const nickname = text(body.nickname, 30, '닉네임');
         if (typeof body.bio !== 'string' || body.bio.length > 200) fail(400, '소개는 200자 이하로 입력해주세요.');
         db.prepare('UPDATE users SET nickname=?,bio=? WHERE id=?').run(nickname, body.bio.trim(), user.id);
         return send(200, { user: publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)) });
       }
-      const decorate = p => ({ ...p,
+      const decorate = p => ({ ...p, avatar_url:avatarURL(p.user_id),
         photos: db.prepare('SELECT id,width,height FROM photos WHERE post_id=? ORDER BY position').all(p.id).map(photo => ({ ...photo, url: '/api/photos/' + photo.id })),
         likes: db.prepare('SELECT count(*) n FROM likes WHERE post_id=?').get(p.id).n,
         liked: !!(user && db.prepare('SELECT 1 FROM likes WHERE post_id=? AND user_id=?').get(p.id,user.id)),
@@ -162,7 +183,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
           else db.prepare('DELETE FROM follows WHERE follower_id=? AND target_id=?').run(user.id,target);
           return send(200, { following: method === 'PUT' });
         }
-        if (!action && method === 'GET') return send(200, { user: { ...person,
+        if (!action && method === 'GET') return send(200, { user: { ...person, avatar_url:avatarURL(person.id),
           followers: db.prepare('SELECT count(*) n FROM follows WHERE target_id=?').get(target).n,
           following: db.prepare('SELECT count(*) n FROM follows WHERE follower_id=?').get(target).n,
           followed: !!(user && db.prepare('SELECT 1 FROM follows WHERE follower_id=? AND target_id=?').get(user.id,target)) } });
@@ -170,7 +191,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
           const followers = action === 'followers';
           const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
           const rows = db.prepare(`SELECT f.id AS cursor,u.id,u.nickname,u.bio FROM follows f JOIN users u ON u.id=f.${followers ? 'follower_id' : 'target_id'} WHERE f.${followers ? 'target_id' : 'follower_id'}=? AND f.id<? AND u.suspended=0 AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.blocker_id=${Number(user?.id||0)} AND b.target_id=u.id) OR (b.target_id=${Number(user?.id||0)} AND b.blocker_id=u.id)) ORDER BY f.id DESC LIMIT 21`).all(target,before);
-          return send(200, { users: rows.slice(0,20), next: rows.length > 20 ? rows[19].cursor : null });
+          return send(200, { users: rows.slice(0,20).map(u=>({...u,avatar_url:avatarURL(u.id)})), next: rows.length > 20 ? rows[19].cursor : null });
         }
       }
       const interaction = path.match(/^\/api\/posts\/(\d+)\/(like|comments)$/);
@@ -185,7 +206,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if (action === 'comments' && method === 'GET') {
           const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
           const rows = db.prepare(`SELECT c.*,u.nickname FROM comments c JOIN users u ON c.user_id=u.id WHERE c.post_id=? AND c.id<? AND ${mod.visibleSQL('c',user?.id)} ORDER BY c.id DESC LIMIT 21`).all(postId,before);
-          return send(200, { comments: rows.slice(0,20), next: rows.length > 20 ? rows[19].id : null });
+          return send(200, { comments: rows.slice(0,20).map(c=>({...c,avatar_url:avatarURL(c.user_id)})), next: rows.length > 20 ? rows[19].id : null });
         }
         if (action === 'comments' && method === 'POST') {
           auth(); const content = text(body.body,300,'댓글');

@@ -89,6 +89,12 @@ export function moderation(db) {
         if(!photo)fail(404,'사진이 없습니다.');
         res.setHeader('Content-Type','image/webp');res.end(Buffer.from(photo.data));return true;
       }
+      const adminAvatar=path.match(/^\/api\/admin\/avatars\/(\d+)\/([a-f0-9]{32})$/);
+      if(adminAvatar&&method==='GET'){
+        const photo=db.prepare('SELECT data FROM avatars WHERE user_id=? AND revision=?').get(Number(adminAvatar[1]),adminAvatar[2]);
+        if(!photo)fail(404,'프로필 사진이 없습니다.');
+        res.setHeader('Content-Type','image/webp');res.end(Buffer.from(photo.data));return true;
+      }
       const detail=path.match(/^\/api\/admin\/reports\/(\d+)(?:\/(resolve))?$/);
       if(path==='/api/admin/reports' && method==='GET') {
         const url=new URL(req.url,'http://local'),status=url.searchParams.get('status')||'open';
@@ -103,6 +109,7 @@ export function moderation(db) {
           // Deliberately omit image data, account email, password hashes and sessions.
           const item=target(report.target_type,report.target_id);
           if(item&&report.target_type==='post')item.photos=db.prepare('SELECT id,width,height FROM photos WHERE post_id=? ORDER BY position').all(item.id).map(p=>({...p,url:'/api/admin/photos/'+p.id}));
+          if(item&&report.target_type==='user'){const picture=db.prepare('SELECT revision FROM avatars WHERE user_id=?').get(item.id);item.avatar_url=picture?`/api/admin/avatars/${item.id}/${picture.revision}`:null;}
           send(200,{report,target:item,actions:db.prepare('SELECT id,action,note,created_at FROM moderation_actions WHERE report_id=? ORDER BY id DESC').all(report.id)});return true;
         }
         if(detail[2]&&method==='POST') {

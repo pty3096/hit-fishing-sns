@@ -30,7 +30,7 @@ test('two-account authentication, owner permissions, validation and logout revoc
   const a = await request(app, 'POST', '/api/signup', credentials('a@example.test'));
   assert.equal(a.status, 201); assert.ok(a.cookie);
   assert.match(a.headers['set-cookie'], /HttpOnly; SameSite=Lax/);
-  assert.deepEqual(Object.keys(a.body.user).sort(), ['bio', 'email_verified', 'id', 'is_admin', 'nickname', 'suspended']);
+  assert.deepEqual(Object.keys(a.body.user).sort(), ['avatar_url', 'bio', 'email_verified', 'id', 'is_admin', 'nickname', 'suspended']);
   assert.equal((await request(app, 'POST', '/api/signup', credentials('A@example.test'))).status, 409);
   assert.equal((await request(app, 'POST', '/api/login', { email: 'a@example.test', password: 'wrong-password-value' })).status, 401);
   const b = await request(app, 'POST', '/api/signup', credentials('b@example.test'));
