@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {notifications} from './notifications.mjs';
 import {isIP} from 'node:net';
 import {emailAuth} from './email-auth.mjs';
 import {readConfig} from './config.mjs';
@@ -47,6 +48,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
   db.exec(`CREATE TABLE IF NOT EXISTS post_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,post_id INTEGER REFERENCES posts(id) ON DELETE SET NULL,PRIMARY KEY(user_id,request_id)); PRAGMA user_version=6;`);
   db.exec(`CREATE TABLE IF NOT EXISTS comment_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,comment_id INTEGER REFERENCES comments(id) ON DELETE SET NULL,PRIMARY KEY(user_id,request_id)); PRAGMA user_version=7;`);
   db.exec(`CREATE TABLE IF NOT EXISTS saved_posts(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,PRIMARY KEY(user_id,post_id)); CREATE INDEX IF NOT EXISTS saved_posts_post ON saved_posts(post_id); PRAGMA user_version=8;`);
+  const notices=notifications(db,mod);
   const avatarURL=id=>{const row=db.prepare('SELECT revision FROM avatars WHERE user_id=?').get(id);return row?`/api/avatars/${id}/${row.revision}`:null;};
   const publicUser=u=>u?{...baseUser(u),avatar_url:avatarURL(u.id)}:null;
   const limits = new Map();
@@ -101,6 +103,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         return timingSafeEqual(candidate,Buffer.from(account.password_hash,'hex'));
       };
       if(await emailService.route({path,method,body,user,req,res,send}))return;
+      if(notices.route({path,method,body,user,auth,send,url}))return;
       if(await mod.route({path,method,body,user,auth,send,req,res,verifyPassword}))return;
       if (path === '/api/me' && method === 'GET') return send(200, { user: publicUser(user) });
       if (['/api/signup', '/api/login'].includes(path) && method === 'POST') {

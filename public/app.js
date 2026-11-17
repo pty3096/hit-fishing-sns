@@ -36,7 +36,7 @@ function formAction(id, action) {
   };
 }
 const icon=name=>`<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
-const upcoming={shorts:'숏폼',community:'커뮤니티',map:'포인트지도',booking:'선상예약',market:'장터',notifications:'알림',ranking:'랭킹'};
+const upcoming={shorts:'숏폼',community:'커뮤니티',map:'포인트지도',booking:'선상예약',market:'장터',ranking:'랭킹'};
 function quickLinks(){return `<div class="quick-grid">${[['feed','feed','조황피드'],['coming/shorts','play','숏폼영상'],['coming/map','map','낚시지도'],['coming/booking','calendar','출조예약'],['coming/community','users','커뮤니티'],['coming/ranking','users','랭킹']].map(([href,symbol,label])=>`<a href="#${href}" class="quick-tile">${icon(symbol)}<strong>${label}</strong>${href.startsWith('coming')?'<small>준비 중</small>':''}</a>`).join('')}</div>`;}
 function discovery(posts){
  const authors=[...new Map(posts.map(p=>[p.user_id,p])).values()].slice(0,3);
@@ -78,6 +78,8 @@ async function render({focus=false}={}) {
     me=session.user;meta=configuration;
     document.querySelector('.notice').textContent=meta.phone_preview?'아이폰 시범 버전 · 별도 테스트 기록 · 인증 안내는 개발용 메일함에서 확인':meta.production?'히트 HIT · 낚시의 순간을 함께':'개발 버전 · 이 PC에 기록을 저장합니다 · 메일 발송 연결 전 로컬 검증';
     const authStatus=document.querySelector('#auth-status');authStatus.hidden=!me||me.email_verified||!meta.verification_required;authStatus.innerHTML='이메일 인증을 완료하면 글 작성과 소통 기능을 이용할 수 있어요. <a href="#settings">인증 안내 →</a>';
+    const bell=document.querySelector('#notifications-link'),badge=document.querySelector('#notification-count');badge.hidden=true;bell.setAttribute('aria-label','알림');
+    if(canWrite(me,meta))api('/notifications?summary=1').then(r=>{if(current!==generation)return;updateNotificationBadge(r.unread);}).catch(()=>{});
     const account = document.querySelector('#account'); account.textContent = me ? `${me.nickname} →` : '로그인 →'; account.href = me ? '#profile' : '#login';
     main.className='';document.body.dataset.route=route.startsWith('user/')||route==='profile'?'profile':route;
     document.querySelectorAll('.navlink,.bottom a,.mobile-top a').forEach(a=>{const section=navigationSection(route);const target=route==='saved'&&a.classList.contains('navlink')?'saved':route.startsWith('coming/')?route:route==='feed'?'feed':a.classList.contains('navlink')&&route==='settings'?'settings':section;const active=a.hash==='#'+target;a.classList.toggle('active',active);if(active)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
@@ -92,6 +94,14 @@ async function render({focus=false}={}) {
         formAction('search',async data=>{const path=searchPath(new URLSearchParams(data));const hash='#search'+(path.includes('?')?path.slice(path.indexOf('?')):'');if(location.hash===hash)await render({focus:true});else location.hash=hash;});
         document.querySelector('#reset-search').onclick=()=>{if(location.hash==='#search')render();else location.hash='search';};
       }
+    } else if(route==='notifications'){
+      if(!guardWrite(route))return;
+      const result=await api('/notifications');if(current!==generation)return;
+      updateNotificationBadge(result.unread);
+      main.innerHTML=`<div class="section-head"><h1>${icon('bell')} 알림</h1><button id="refresh-notifications" type="button">새로고침</button></div><p class="muted">내 조황의 댓글·좋아요와 새 팔로워 소식을 확인하세요. 화면을 열거나 새로고침하면 갱신됩니다.</p><button id="read-all" type="button" ${!result.unread?'disabled':''}>모두 읽음</button><div id="notifications-list"></div>`;
+      showNotifications(result);
+      document.querySelector('#refresh-notifications').onclick=()=>render();
+      document.querySelector('#read-all').onclick=async event=>{event.target.disabled=true;try{if(result.notifications[0])await api('/notifications/read','PUT',{through_id:result.notifications[0].id});if(current===generation)await render();}catch(e){toast(e.message);if(event.target.isConnected)event.target.disabled=false;}};
     } else if(route==='saved'){
       if(!guardWrite(route))return;
       const result=await api('/posts?saved=1');if(current!==generation)return;
@@ -332,6 +342,16 @@ main.addEventListener('click',async event => {
     } else { await api('/comments/'+button.dataset.deleteComment,'DELETE',{}); await loadComments(button.dataset.post); toast('댓글을 삭제했습니다.'); }
   } catch(e) {toast(e.message);} finally {button.disabled=false;}
 });
+function updateNotificationBadge(unread){const badge=document.querySelector('#notification-count');badge.hidden=!unread;badge.textContent=unread>99?'99+':String(unread);document.querySelector('#notifications-link').setAttribute('aria-label',unread?`알림, 읽지 않은 알림 ${unread}개`:'알림');}
+function showNotifications(result,append=false){
+  const list=document.querySelector('#notifications-list'),viewGeneration=generation;
+  if(!list)return;
+  if(!append)list.replaceChildren();
+  if(!result.notifications.length&&!append){list.innerHTML='<section class="card empty"><h2>아직 새로운 소식이 없어요.</h2><p class="muted">내 조황에 댓글·좋아요가 달리거나 새 팔로워가 생기면 알려드릴게요.</p><a href="#feed" class="primary">조황피드 둘러보기</a></section>';return;}
+  for(const n of result.notifications){const item=document.createElement('article');item.className='card notification-item '+(n.is_read?'is-read':'is-unread');item.innerHTML=`<span class="notification-symbol">${icon(n.kind==='follow'?'users':n.kind==='like'?'feed':'bell')}</span><div><p><strong>${esc(n.nickname)}</strong>님이 ${n.kind==='follow'?'나를 팔로우했습니다.':n.kind==='like'?'내 조황을 좋아합니다.':'내 조황에 댓글을 남겼습니다.'}</p><small class="muted">${esc(new Date(n.created_at).toLocaleString('ko-KR'))} · ${n.is_read?'읽음':'읽지 않음'}</small><button type="button" data-notification="${n.id}" data-destination="${esc(n.href)}">${n.kind==='follow'?'프로필 확인':'조황 확인'} →</button></div>`;list.append(item);}
+  if(result.next){const more=document.createElement('button');more.type='button';more.textContent='이전 알림 더 보기';list.append(more);more.onclick=async()=>{more.disabled=true;try{const next=await api('/notifications?before='+result.next);if(viewGeneration!==generation)return;more.remove();showNotifications(next,true);}catch(e){toast(e.message);more.disabled=false;}};}
+}
+main.addEventListener('click',async event=>{const button=event.target.closest('[data-notification]');if(!button)return;const current=generation;button.disabled=true;try{await api('/notifications/'+button.dataset.notification+'/read','PUT',{});if(current===generation)location.hash=button.dataset.destination;}catch(e){toast(e.message);button.disabled=false;}});
 function updateGallery(track){
   const gallery=track.closest('.gallery'),count=track.children.length,index=galleryPosition(track.scrollLeft,track.clientWidth,count);
   gallery.querySelector('.gallery-position').textContent=`${index+1} / ${count}`;

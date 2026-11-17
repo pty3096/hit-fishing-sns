@@ -13,6 +13,8 @@ Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 
 
 ## 자료
 
+- [댓글·좋아요·팔로우 앱 안 알림](docs/22_NOTIFICATIONS.md)
+
 - [개인 저장 목록](docs/21_SAVED_POSTS.md)
 
 - [확정 UI v1.1 반영·차이와 검증](docs/20_APPROVED_UI.md)
