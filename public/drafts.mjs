@@ -1,7 +1,7 @@
 const prefix='hit-draft-v1:';
-const limits={title:60,fish:30,region:50,method:30,fishing_date:10,body:2000};
+const limits={title:60,fish:30,region:50,method:30,fishing_date:10,body:2000,price:16,trade_status:7};
 export function draftFields(value={}) {
-  return Object.fromEntries(Object.entries(limits).map(([key,max])=>[key,typeof value[key]==='string'?value[key].slice(0,max):'']));
+  return Object.fromEntries(Object.entries(limits).map(([key,max])=>[key,typeof value[key]==='string'?value[key].slice(0,max):key==='price'&&Number.isSafeInteger(value[key])?String(value[key]):'']));
 }
 export function draftStore(storage,now=()=>Date.now()) {
   const key=(owner,post)=>`${prefix}${owner}:${post}`;

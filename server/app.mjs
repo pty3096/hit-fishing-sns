@@ -51,6 +51,8 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
   const notices=notifications(db,mod);
   if(!db.prepare('PRAGMA table_info(posts)').all().some(column=>column.name==='kind'))db.exec("ALTER TABLE posts ADD COLUMN kind TEXT NOT NULL DEFAULT 'catch'");
   db.exec('CREATE INDEX IF NOT EXISTS posts_kind ON posts(kind,id); PRAGMA user_version=10;');
+  for(const [name,type] of [['price','INTEGER'],['trade_status','TEXT']])if(!db.prepare('PRAGMA table_info(posts)').all().some(column=>column.name===name))db.exec('ALTER TABLE posts ADD COLUMN '+name+' '+type);
+  db.exec('PRAGMA user_version=11;');
   const avatarURL=id=>{const row=db.prepare('SELECT revision FROM avatars WHERE user_id=?').get(id);return row?`/api/avatars/${id}/${row.revision}`:null;};
   const publicUser=u=>u?{...baseUser(u),avatar_url:avatarURL(u.id)}:null;
   const limits = new Map();
@@ -265,11 +267,13 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       if (path === '/api/posts' && method === 'GET') {
         const clauses = [mod.visibleSQL('p',user?.id)], values = [];
         const kind=url.searchParams.get('kind');
-        if(kind&&!['catch','community'].includes(kind))fail(400,'게시판을 확인해주세요.');
+        if(kind&&!['catch','community','market'].includes(kind))fail(400,'게시판을 확인해주세요.');
         if(kind||url.searchParams.get('saved')!=='1'){clauses.push('p.kind=?');values.push(kind||'catch');}
         if (url.searchParams.get('mine') === '1') { auth(); clauses.push('p.user_id=?'); values.push(user.id); }
         if (url.searchParams.get('following') === '1') { auth(); clauses.push('p.user_id IN (SELECT target_id FROM follows WHERE follower_id=?)'); values.push(user.id); }
         if(url.searchParams.get('saved')==='1'){auth();clauses.push('p.id IN (SELECT post_id FROM saved_posts WHERE user_id=?)');values.push(user.id);}
+        const tradeStatus=url.searchParams.get('trade_status');
+        if(tradeStatus){if(kind!=='market'||!['selling','sold'].includes(tradeStatus))fail(400,'거래 상태를 확인해주세요.');clauses.push('p.trade_status=?');values.push(tradeStatus);}
         const author = Number(url.searchParams.get('author')); if (author > 0) { clauses.push('p.user_id=?'); values.push(author); }
         for (const field of ['fish', 'region', 'method']) { const v = url.searchParams.get(field)?.trim(); if (v) { clauses.push(`p.${field} LIKE ? ESCAPE '\\'`); values.push('%'+v.slice(0,80).replace(/[\\%_]/g,'\\$&')+'%'); } }
         const from=url.searchParams.get('date_from')?.trim(),to=url.searchParams.get('date_to')?.trim();
@@ -301,11 +305,15 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         const completed=replay();if(completed)return send(200,completed);
         if (id) { const old = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id); if (!old) fail(404, '게시물이 없습니다.'); if (old.user_id !== user.id) fail(403, '본인의 게시물만 수정할 수 있습니다.'); if(!mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(id),user))fail(403,'숨김 처리된 게시물은 수정할 수 없습니다.'); }
         const postKind=id?db.prepare('SELECT kind FROM posts WHERE id=?').get(id).kind:(body.kind===undefined?'catch':body.kind);
-        if(!['catch','community'].includes(postKind)||(id&&body.kind!==undefined&&body.kind!==postKind))fail(400,'게시물 종류를 바꿀 수 없습니다.');
-        const community=postKind==='community';
-        const fields = [text(body.title,60,'제목'),text(body.body,2000,'내용'),...(community?['','','']:[text(body.fish,30,'어종'),text(body.region,50,'지역'),text(body.method,30,'낚시 방식')])];
-        const date=community?'':text(body.fishing_date,10,'출조일');
-        if(!community&&(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date))fail(400,'출조일을 확인해주세요.');
+        if(!['catch','community','market'].includes(postKind)||(id&&body.kind!==undefined&&body.kind!==postKind))fail(400,'게시물 종류를 바꿀 수 없습니다.');
+        const community=postKind==='community',market=postKind==='market',discussion=community||market;
+        const fields = [text(body.title,60,'제목'),text(body.body,2000,'내용'),...(discussion?['',market?text(body.region,50,'거래 지역'):'','']:[text(body.fish,30,'어종'),text(body.region,50,'지역'),text(body.method,30,'낚시 방식')])];
+        const date=discussion?'':text(body.fishing_date,10,'출조일');
+        if(!discussion&&(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date))fail(400,'출조일을 확인해주세요.');
+        const price=market?body.price:null;
+        if(market&&(!Number.isSafeInteger(price)||price<0||price>1000000000))fail(400,'가격은 0원부터 10억원까지 정수로 입력해주세요.');
+        const tradeStatus=market?(body.trade_status??(id?db.prepare('SELECT trade_status FROM posts WHERE id=?').get(id).trade_status:'selling')):null;
+        if(market&&!['selling','sold'].includes(tradeStatus))fail(400,'거래 상태를 확인해주세요.');
         if(!community&&!id&&(!Array.isArray(body.photos)||!body.photos.length))fail(400,'새 조황에는 사진을 한 장 이상 선택해주세요.');
         if(body.photos!==undefined&&(!Array.isArray(body.photos)||(!community&&body.photos.length<1)))fail(400,'사진을 한 장 이상 남겨주세요.');
         if(Array.isArray(body.photos)&&body.photos.length>5)fail(400,'사진은 최대 5장까지 등록할 수 있습니다.');
@@ -326,8 +334,8 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
             if (!current) fail(404,'게시물이 없습니다.');
             if (current.user_id !== user.id) fail(403,'본인의 게시물만 수정할 수 있습니다.');
             if(!mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(id),user))fail(403,'숨김 처리된 게시물은 수정할 수 없습니다.');
-            db.prepare('UPDATE posts SET title=?,body=?,fish=?,region=?,method=?,fishing_date=? WHERE id=?').run(...fields,date,id);
-          } else savedId = Number(db.prepare('INSERT INTO posts(id,user_id,title,body,fish,region,method,fishing_date,created_at,kind) VALUES(?,?,?,?,?,?,?,?,?,?)').run(mod.nextId('posts'),user.id,...fields,date,new Date().toISOString(),postKind).lastInsertRowid);
+            db.prepare('UPDATE posts SET title=?,body=?,fish=?,region=?,method=?,fishing_date=?,price=?,trade_status=? WHERE id=?').run(...fields,date,price,tradeStatus,id);
+          } else savedId = Number(db.prepare('INSERT INTO posts(id,user_id,title,body,fish,region,method,fishing_date,created_at,kind,price,trade_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(mod.nextId('posts'),user.id,...fields,date,new Date().toISOString(),postKind,price,tradeStatus).lastInsertRowid);
           if (photos) {
             db.prepare('DELETE FROM photos WHERE post_id=?').run(savedId);
             photos.forEach((photo,position) => db.prepare('INSERT INTO photos VALUES(?,?,?,?,?,?)').run(randomBytes(16).toString('hex'),savedId,position,photo.data,photo.width,photo.height));

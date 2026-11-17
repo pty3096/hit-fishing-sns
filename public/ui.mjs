@@ -10,6 +10,7 @@ export function searchPath(params) {
 export function navigationSection(route) {
   if(['home','following'].includes(route)||route.startsWith('post/'))return 'home';
   if(route==='community'||route==='community-write')return 'community';
+  if(route==='market'||route==='market-write')return 'market';
   if(route==='ranking')return 'ranking';
   if(route==='search')return 'search';
   if(route==='write'||route.startsWith('edit/'))return 'write';
@@ -20,6 +21,7 @@ export function canWrite(user,meta) {
 }
 export function emptyMessage(kind='home') {
   return ({
+    market:{title:'조건에 맞는 상품 글이 없어요.',body:'거래 지역이나 판매 상태를 바꿔보세요.',href:'#market',label:'전체 상품 글 보기 →'},
     community:{title:'첫 이야기를 나눠보세요.',body:'낚시 질문이나 유용한 정보를 남겨주세요.',href:'#community-write',label:'커뮤니티 글쓰기 →'},
     home:{title:'아직 조황이 없어요.',body:'오늘의 첫 기록을 남겨볼까요?',href:'#write',label:'첫 조황 남기기 →'},
     search:{title:'조건에 맞는 조황이 없어요.',body:'어종이나 지역을 바꾸거나 검색 조건을 지워보세요.',href:'#search',label:'검색 조건 지우기 →'},

@@ -23,3 +23,9 @@ test('community and catch drafts do not overwrite each other',()=>{
  assert.equal(d.read(1,'new').title,'조황');assert.equal(d.read(1,'new-community').title,'질문');
  d.remove(1,'new-community');assert.equal(d.read(1,'new').title,'조황');
 });
+
+test('market draft price and status restore independently and match submitted numeric prices',()=>{
+ const storage=memory(),d=draftStore(storage);d.write(1,'new',{title:'조황'});d.write(1,'new-market',{title:'가방',price:'15000',trade_status:'selling',region:'강릉'});
+ assert.equal(d.read(1,'new-market').price,'15000');assert.equal(d.read(1,'new-market').trade_status,'selling');assert.equal(d.read(1,'new').title,'조황');
+ const {price}=d.read(1,'new-market');assert.equal(Number(price),15000);d.clear(1);assert.equal(d.read(1,'new-market'),null);
+});
