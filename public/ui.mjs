@@ -29,3 +29,17 @@ export function galleryPosition(scroll,width,count) {
   if(!count||width<=0)return 0;
   return Math.min(count-1,Math.max(0,Math.round(scroll/(width||1))));
 }
+
+export function photoSelectionError(files,existing=0,max=5) {
+  if(!files.length)return '';
+  if(existing+files.length>max)return `사진은 최대 ${max}장까지 선택할 수 있어요. 기존 사진을 지우거나 적게 선택해주세요.`;
+  for(const file of files){
+    if(file.size===0)return '빈 사진 파일입니다. 다른 사진을 선택해주세요.';
+    if(file.size>10*1024*1024)return '사진은 장당 10MB 이하로 선택해주세요. 크기를 줄인 사진으로 다시 시도해주세요.';
+    if(!['image/jpeg','image/png','image/webp'].includes(file.type)){
+      if(/image\/(heic|heif)/i.test(file.type)||/\.(heic|heif)$/i.test(file.name||''))return '아이폰 HEIC·HEIF 원본은 아직 지원하지 않습니다. JPG로 변환한 사진이나 스크린샷(PNG)을 선택해주세요. 확장자만 바꾸면 변환되지 않습니다.';
+      return 'JPG·PNG·WebP 사진만 선택할 수 있어요. 동영상·GIF·RAW는 지원하지 않습니다.';
+    }
+  }
+  return '';
+}

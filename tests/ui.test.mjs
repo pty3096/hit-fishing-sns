@@ -25,3 +25,17 @@ test('gallery controls handle first and last photos, overscroll and unmeasured l
   assert.equal(galleryPosition(0,360,3),0);assert.equal(galleryPosition(360,360,3),1);assert.equal(galleryPosition(720,360,3),2);
   assert.equal(galleryPosition(-50,360,3),0);assert.equal(galleryPosition(1000,360,3),2);assert.equal(galleryPosition(500,0,3),0);assert.equal(galleryPosition(0,360,0),0);
 });
+
+test('photo picker explains iPhone formats, size and count without accepting disguised files',async()=>{
+ const {photoSelectionError:check}=await import('../public/ui.mjs');
+ const jpg={name:'sea.jpg',type:'image/jpeg',size:100};
+ assert.equal(check([jpg],4),'');assert.equal(check([],5),'');
+ assert.match(check([jpg],5),/최대 5장/);
+ assert.match(check([{name:'IMG.HEIC',type:'',size:100}]),/확장자만/);
+ assert.match(check([{name:'sea.jpg',type:'image/heif',size:100}]),/HEIC/);
+ assert.match(check([{...jpg,size:10*1024*1024+1}]),/10MB/);
+ assert.equal(check([{...jpg,size:10*1024*1024}]),'');
+ assert.match(check([{...jpg,size:0}]),/빈 사진/);
+ assert.match(check([{...jpg,type:'image/gif'}]),/GIF/);
+ assert.match(check([{...jpg,type:''}]),/JPG/);
+});

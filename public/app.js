@@ -1,4 +1,4 @@
-import {parseRoute,searchPath,navigationSection,canWrite,emptyMessage,galleryPosition} from './ui.mjs';
+import {parseRoute,searchPath,navigationSection,canWrite,emptyMessage,galleryPosition,photoSelectionError} from './ui.mjs';
 import {draftStore,draftFields} from './drafts.mjs';
 let drafts;try{drafts=draftStore(sessionStorage);}catch{drafts=draftStore(null);}
 let editor=null,activeHash=location.hash;
@@ -107,7 +107,7 @@ async function render({focus=false}={}) {
       const p = id ? (await api('/posts/' + id)).post : {};
       if (current !== generation) return;
       if (id && p.user_id !== me.id) throw new Error('본인의 게시물만 수정할 수 있습니다.');
-      main.innerHTML = `<a class="back" href="#home">← 피드로</a><h1>${id ? '조황 수정하기' : '오늘의 조황 남기기'}</h1><section class="card"><p class="muted">사진과 함께 오늘의 한 수를 기록해요. 사진의 위치 정보는 저장 시 제거됩니다.</p><p id="draft-status" class="field-help" role="status">글은 이 탭에 24시간 임시 저장됩니다. 탭을 닫으면 사라집니다. 사진과 사진 삭제·순서 변경은 임시 저장되지 않습니다.</p><div id="draft-offer" hidden><p>작성 중이던 임시 글이 있어요. 이어쓰려면 사진은 다시 확인해주세요.</p><button type="button" id="draft-restore">이어쓰기</button><button type="button" id="draft-discard">임시 글 삭제</button></div><form id="post-form" class="form"><label for="photos">조황 사진 (최대 5장, 장당 10MB)</label><input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple><p class="field-help">JPG·PNG·WebP · 사진을 선택한 뒤 개별 삭제할 수 있습니다.</p><div id="photo-preview" class="photo-preview"></div>${[['title', '제목', 60], ['fish', '어종', 30], ['region', '지역 (시·군·구)', 50], ['method', '낚시 방식', 30]].map(([name, label, max]) => `<label for="${name}">${label}</label><input id="${name}" name="${name}" value="${esc(p[name])}" maxlength="${max}" required>`).join('')}<label for="fishing_date">출조일</label><input id="fishing_date" name="fishing_date" type="date" value="${esc(p.fishing_date)}" required><label for="body">이야기</label><textarea id="body" name="body" maxlength="2000" required>${esc(p.body)}</textarea>${formError}<button class="primary" type="submit">${id ? '수정 저장' : '조황 등록'}</button></form></section>`;
+      main.innerHTML = `<a class="back" href="#home">← 피드로</a><h1>${id ? '조황 수정하기' : '오늘의 조황 남기기'}</h1><section class="card"><p class="muted">사진과 함께 오늘의 한 수를 기록해요. 사진의 위치 정보는 저장 시 제거됩니다.</p><p id="draft-status" class="field-help" role="status">글은 이 탭에 24시간 임시 저장됩니다. 탭을 닫으면 사라집니다. 사진과 사진 삭제·순서 변경은 임시 저장되지 않습니다.</p><div id="draft-offer" hidden><p>작성 중이던 임시 글이 있어요. 이어쓰려면 사진은 다시 확인해주세요.</p><button type="button" id="draft-restore">이어쓰기</button><button type="button" id="draft-discard">임시 글 삭제</button></div><form id="post-form" class="form"><label for="photos">조황 사진 (최대 5장, 장당 10MB)</label><input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-describedby="photo-help photo-error"><p id="photo-help" class="field-help">JPG·PNG·WebP · 사진을 선택한 뒤 개별 삭제할 수 있습니다. HEIC 원본은 JPG로 변환하거나 스크린샷을 선택해주세요.</p><p id="photo-error" class="error" role="alert" hidden></p><p id="photo-count" class="field-help" role="status"></p><div id="photo-preview" class="photo-preview"></div>${[['title', '제목', 60], ['fish', '어종', 30], ['region', '지역 (시·군·구)', 50], ['method', '낚시 방식', 30]].map(([name, label, max]) => `<label for="${name}">${label}</label><input id="${name}" name="${name}" value="${esc(p[name])}" maxlength="${max}" required>`).join('')}<label for="fishing_date">출조일</label><input id="fishing_date" name="fishing_date" type="date" value="${esc(p.fishing_date)}" required><label for="body">이야기</label><textarea id="body" name="body" maxlength="2000" required>${esc(p.body)}</textarea>${formError}<button class="primary" type="submit">${id ? '수정 저장' : '조황 등록'}</button></form></section>`;
       let selectedPhotos = (p.photos || []).map(photo => ({ id:photo.id, url:photo.url }));
       const originalCount = selectedPhotos.length;
       const owner=me.id,key=id||'new',form=document.querySelector('#post-form'),status=document.querySelector('#draft-status');
@@ -133,21 +133,23 @@ async function render({focus=false}={}) {
       }
 
       const previews = () => {
-        const container = document.querySelector('#photo-preview'); container.replaceChildren();
+        const container = document.querySelector('#photo-preview'); container.replaceChildren();document.querySelector('#photo-count').textContent=`선택한 사진 ${selectedPhotos.length} / 5장`;
         selectedPhotos.forEach((photo,index) => {
           const item = document.createElement('div'), img = document.createElement('img'), remove = document.createElement('button');
           img.src = photo.url; img.alt = '선택한 조황 사진 ' + (index+1);
           remove.type = 'button'; remove.textContent = '사진 ' + (index+1) + ' 삭제';
-          remove.onclick = () => { selectedPhotos.splice(index,1); previews(); };
+          remove.onclick = () => { const [removed]=selectedPhotos.splice(index,1);if(removed.file){URL.revokeObjectURL(removed.url);previewUrls=previewUrls.filter(url=>url!==removed.url);}document.querySelector('#photo-error').hidden=true;document.querySelector('#photos').removeAttribute('aria-invalid');previews(); };
           item.append(img,remove); container.append(item);
         });
       };
       previews();
       document.querySelector('#photos').onchange = event => {
         const files = [...event.target.files];
-        if (selectedPhotos.length + files.length > 5 || files.some(file => !['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 10*1024*1024)) {
-          toast('JPG·PNG·WebP, 장당 10MB 이하로 최대 5장까지 선택해주세요.');
-        } else for (const file of files) { const url = URL.createObjectURL(file); previewUrls.push(url); selectedPhotos.push({file,url}); }
+        if(!files.length)return;
+        const message=photoSelectionError(files,selectedPhotos.length),error=document.querySelector('#photo-error');
+        error.textContent=message;error.hidden=!message;
+        if(message){event.target.setAttribute('aria-invalid','true');}
+        else {event.target.removeAttribute('aria-invalid');for (const file of files) { const url = URL.createObjectURL(file); previewUrls.push(url); selectedPhotos.push({file,url}); }}
         event.target.value = ''; previews();
       };
       formAction('post-form',async(data,stillHere)=>{
@@ -220,13 +222,15 @@ async function render({focus=false}={}) {
       formAction('resolve-report',async body=>{await api('/admin/reports/'+id+'/resolve','POST',body);toast('조치를 기록했습니다.');render();});
     } else if (route === 'profile-edit') {
       if (!guardWrite(route)) return;
-      main.innerHTML = `<h1>나를 소개해요</h1><section class="card"><h2>프로필 사진</h2><div class="profile-avatar-preview" id="avatar-preview">${avatar(me)}</div><form id="avatar-form" class="form"><label for="avatar-file">사진 선택</label><input id="avatar-file" type="file" accept="image/jpeg,image/png,image/webp" required><p class="field-help">JPG·PNG·WebP 1장, 최대 10MB. 가운데를 정사각형으로 맞추고 위치 정보는 제거합니다.</p>${formError}<button class="primary" type="submit">사진 저장</button></form><button id="remove-avatar" type="button" ${!me.avatar_url?'disabled':''}>기본 이미지로 변경</button></section><form id="profile" class="card form"><label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="30" value="${esc(me.nickname)}" required><label for="bio">소개</label><textarea id="bio" name="bio" maxlength="200">${esc(me.bio)}</textarea>${formError}<button class="primary" type="submit">프로필 저장</button></form>`;
+      main.innerHTML = `<h1>나를 소개해요</h1><section class="card"><h2>프로필 사진</h2><div class="profile-avatar-preview" id="avatar-preview">${avatar(me)}</div><form id="avatar-form" class="form"><label for="avatar-file">사진 선택</label><input id="avatar-file" type="file" accept="image/jpeg,image/png,image/webp" required aria-describedby="avatar-help avatar-error"><p id="avatar-help" class="field-help">JPG·PNG·WebP 1장, 최대 10MB. 가운데를 정사각형으로 맞추고 위치 정보는 제거합니다. HEIC 원본은 JPG나 PNG로 변환해주세요.</p><p id="avatar-error" class="error" role="alert" hidden></p>${formError}<button class="primary" type="submit">사진 저장</button></form><button id="remove-avatar" type="button" ${!me.avatar_url?'disabled':''}>기본 이미지로 변경</button></section><form id="profile" class="card form"><label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="30" value="${esc(me.nickname)}" required><label for="bio">소개</label><textarea id="bio" name="bio" maxlength="200">${esc(me.bio)}</textarea>${formError}<button class="primary" type="submit">프로필 저장</button></form>`;
       let selectedAvatar=null;
       document.querySelector('#avatar-file').onchange=event=>{
         const file=event.target.files[0];
         if(!file)return;
-        if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>10*1024*1024){toast('JPG·PNG·WebP 사진을 10MB 이하로 선택해주세요.');event.target.value='';selectedAvatar=null;document.querySelector('#avatar-preview').innerHTML=avatar(me);return;}
-        selectedAvatar=file;const url=URL.createObjectURL(file);previewUrls.push(url);document.querySelector('#avatar-preview').innerHTML=avatar({nickname:me.nickname,avatar_url:url});
+        const message=photoSelectionError([file],0,1),error=document.querySelector('#avatar-error');error.textContent=message;error.hidden=!message;
+        if(message){event.target.setAttribute('aria-invalid','true');event.target.value='';return;}
+        event.target.removeAttribute('aria-invalid');
+        selectedAvatar=file;event.target.required=false;const url=URL.createObjectURL(file);previewUrls.push(url);document.querySelector('#avatar-preview').innerHTML=avatar({nickname:me.nickname,avatar_url:url});
       };
       formAction('avatar-form',async(_,stillHere)=>{if(!selectedAvatar)throw new Error('사진을 선택해주세요.');const picker=document.querySelector('#avatar-file'),remove=document.querySelector('#remove-avatar');picker.disabled=true;remove.disabled=true;try{const r=await api('/profile/photo','PUT',{photo:{data:await fileBase64(selectedAvatar)}});if(stillHere()){me=r.user;render();}toast('프로필 사진을 저장했습니다.');}finally{picker.disabled=false;remove.disabled=!me?.avatar_url;}});
       document.querySelector('#remove-avatar').onclick=async event=>{event.target.disabled=true;try{me=(await api('/profile/photo','DELETE',{})).user;toast('기본 이미지로 변경했습니다.');render();}catch(e){toast(e.message);event.target.disabled=false;}};
