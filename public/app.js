@@ -40,6 +40,7 @@ const avatar=person=>`<div class="avatar">${person.avatar_url?`<img src="${esc(p
 const likeButton = p => `<button data-like="${p.id}" data-liked="${p.liked}" aria-pressed="${p.liked}" class="${p.liked ? 'liked' : ''}">${p.liked ? '♥' : '♡'} 좋아요 ${p.likes}</button>`;
 function card(p) { return `<article class="card"><div class="author">${avatar(p)}<div><a href="#user/${p.user_id}"><strong>${esc(p.nickname)}</strong></a><div class="muted">${esc(p.region)} · ${esc(p.fishing_date)}</div></div></div><a href="#post/${p.id}">${p.photos?.[0] ? `<img class="feed-photo" src="${esc(p.photos[0].url)}" alt="${esc(p.title)} 조황 사진" loading="lazy">` : ''}<h2 class="post-title">${esc(p.title)}</h2><p class="content">${esc(p.body.slice(0, 100))}${p.body.length > 100 ? '…' : ''}</p></a><p><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><div class="actions">${likeButton(p)}<a href="#post/${p.id}">댓글 ${p.comment_count}</a></div></article>`; }
 function showList(target,result,morePath,kind='home',append=false) {
+  const viewGeneration=generation;
   const list=document.querySelector(target);if(!list)return;
   const empty=emptyMessage(kind);
   list.innerHTML=result.posts.map(card).join('')||(append?'<p class="muted">더 이상 조황이 없습니다.</p>':`<section class="card empty"><h2>${esc(empty.title)}</h2><p class="muted">${esc(empty.body)}</p><a class="primary" href="${empty.href}">${esc(empty.label)}</a></section>`);
@@ -47,7 +48,7 @@ function showList(target,result,morePath,kind='home',append=false) {
   const more = document.createElement('button'); more.textContent = '조황 더 보기'; list.append(more);
   more.onclick = async () => {
     more.disabled = true;
-    try { const next = await api(morePath + (morePath.includes('?') ? '&' : '?') + 'before=' + result.next); const container = document.createElement('div'); container.id = 'page-' + result.next; more.replaceWith(container); showList('#' + container.id,next,morePath,kind,true); }
+    try { const next = await api(morePath + (morePath.includes('?') ? '&' : '?') + 'before=' + result.next);if(viewGeneration!==generation)return; const container = document.createElement('div'); container.id = 'page-' + result.next; more.replaceWith(container); showList('#' + container.id,next,morePath,kind,true); }
     catch (e) { toast(e.message); more.disabled = false; }
   };
 }
@@ -58,8 +59,8 @@ async function render({focus=false}={}) {
   main.innerHTML = '<section class="card" role="status">기록을 불러오고 있어요…</section>';
   try {
     const [session,configuration]=await Promise.all([api('/me'),api('/meta')]);
+    if(current!==generation)return;
     me=session.user;meta=configuration;
-    if (current !== generation) return;
     document.querySelector('.notice').textContent=meta.production?'히트 HIT · 낚시의 순간을 함께':'개발 버전 · 이 PC에 기록을 저장합니다 · 메일 발송 연결 전 로컬 검증';
     const authStatus=document.querySelector('#auth-status');authStatus.hidden=!me||me.email_verified||!meta.verification_required;authStatus.innerHTML='이메일 인증을 완료하면 글 작성과 소통 기능을 이용할 수 있어요. <a href="#settings">인증 안내 →</a>';
     const account = document.querySelector('#account'); account.textContent = me ? `${me.nickname} →` : '로그인 →'; account.href = me ? '#profile' : '#login';
