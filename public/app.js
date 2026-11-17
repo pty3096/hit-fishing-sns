@@ -1,4 +1,4 @@
-import {parseRoute,searchPath,navigationSection,canWrite,emptyMessage,galleryPosition,photoSelectionError} from './ui.mjs';
+import {parseRoute,searchPath,navigationSection,canWrite,emptyMessage,galleryPosition,photoSelectionError,searchValidation} from './ui.mjs';
 import {draftStore,draftFields} from './drafts.mjs';
 let drafts;try{drafts=draftStore(sessionStorage);}catch{drafts=draftStore(null);}
 let editor=null,activeHash=location.hash;
@@ -88,10 +88,10 @@ async function render({focus=false}={}) {
       const listPath=route==='following'?'/posts?following=1':route==='search'?searchPath(params):'/posts';
       const result = await api(listPath); if (current !== generation) return;
       if(route!=='search')discovery(result.posts);
-      main.innerHTML = route !== 'search' ? `${route!=='feed'?homeIntro(result.posts):'<div class="section-head"><h1>조황피드</h1><a href="#write" class="primary">글쓰기</a></div>'}<div class="tabs"><a class="filter-tab" href="#feed" aria-current="${route !== 'following' ? 'page' : 'false'}">전체 조황</a><a class="filter-tab" href="#following" aria-current="${route === 'following' ? 'page' : 'false'}">팔로잉</a></div><h2>${route === 'following' ? '팔로잉 조황' : '최근 조황'}</h2><div id="posts"></div>` : `<div class="eyebrow">DISCOVER</div><h1>조황 찾아보기</h1><form id="search" class="card form"><label for="fish">어종</label><input id="fish" name="fish" maxlength="30" value="${esc(params.get('fish'))}" placeholder="예: 농어"><label for="region">지역</label><input id="region" name="region" maxlength="50" value="${esc(params.get('region'))}" placeholder="예: 강릉, 거제"><p class="field-help">지역의 일부만 입력해도 찾아드려요. 예: 강릉, 거제</p>${formError}<button class="primary" type="submit">검색</button><button id="reset-search" type="button">전체 보기</button></form><div id="posts"></div>`;
+      main.innerHTML = route !== 'search' ? `${route!=='feed'?homeIntro(result.posts):'<div class="section-head"><h1>조황피드</h1><a href="#write" class="primary">글쓰기</a></div>'}<div class="tabs"><a class="filter-tab" href="#feed" aria-current="${route !== 'following' ? 'page' : 'false'}">전체 조황</a><a class="filter-tab" href="#following" aria-current="${route === 'following' ? 'page' : 'false'}">팔로잉</a></div><h2>${route === 'following' ? '팔로잉 조황' : '최근 조황'}</h2><div id="posts"></div>` : `<div class="eyebrow">DISCOVER</div><h1>조황 찾아보기</h1><form id="search" class="card form"><label for="fish">어종</label><input id="fish" name="fish" maxlength="30" value="${esc(params.get('fish'))}" placeholder="예: 농어"><label for="region">지역</label><input id="region" name="region" maxlength="50" value="${esc(params.get('region'))}" placeholder="예: 강릉, 거제"><p class="field-help">지역의 일부만 입력해도 찾아드려요. 예: 강릉, 거제</p><details class="advanced-search" ${['method','date_from','date_to'].some(key=>params.get(key))?'open':''}><summary>낚시 방식·출조 기간</summary><label for="method-filter">낚시 방식</label><input id="method-filter" name="method" maxlength="30" value="${esc(params.get('method'))}" placeholder="예: 루어, 원투, 찌낚시"><div class="grid date-grid"><div><label for="date-from">출조 시작일</label><input id="date-from" name="date_from" type="date" value="${esc(params.get('date_from'))}"></div><div><label for="date-to">출조 종료일</label><input id="date-to" name="date_to" type="date" value="${esc(params.get('date_to'))}"></div></div><p class="field-help">출조일 기준이며 시작일·종료일을 모두 포함합니다. 한쪽 날짜만 입력해도 검색할 수 있어요.</p></details>${formError}<button class="primary" type="submit">검색</button><button id="reset-search" type="button">전체 보기</button></form><div id="posts"></div>`;
       showList('#posts',result,listPath,route==='search'?'search':route==='following'?'following':'home');
       if (route === 'search') {
-        formAction('search',async data=>{const path=searchPath(new URLSearchParams(data));const hash='#search'+(path.includes('?')?path.slice(path.indexOf('?')):'');if(location.hash===hash)await render({focus:true});else location.hash=hash;});
+        formAction('search',async data=>{const error=searchValidation(data);if(error)throw new Error(error);const path=searchPath(new URLSearchParams(data));const hash='#search'+(path.includes('?')?path.slice(path.indexOf('?')):'');if(location.hash===hash)await render({focus:true});else location.hash=hash;});
         document.querySelector('#reset-search').onclick=()=>{if(location.hash==='#search')render();else location.hash='search';};
       }
     } else if(route==='notifications'){
@@ -287,7 +287,7 @@ async function render({focus=false}={}) {
     } else throw new Error('없는 화면입니다. 홈으로 이동해주세요.');
   } catch (e) {
     if (current !== generation) return;
-    main.innerHTML = `<section class="card"><h2>잠시 확인이 필요해요</h2><p class="error" role="alert">${esc(e.message)}</p><button id="retry">다시 시도</button> <a href="#home">홈으로</a></section>`;
+    main.innerHTML = `<section class="card"><h2>잠시 확인이 필요해요</h2><p class="error" role="alert">${esc(e.message)}</p><button id="retry">다시 시도</button> ${route==='search'?'<a href="#search" class="back">검색 조건 초기화</a>':''} <a href="#home">홈으로</a></section>`;
     document.querySelector('#retry').onclick=()=>render({focus:true});
   }finally{if(current===generation){main.removeAttribute('aria-busy');if(focus)main.focus({preventScroll:true});}}
 }

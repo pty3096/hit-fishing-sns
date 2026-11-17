@@ -409,3 +409,21 @@ test('notifications are private and persistent, deduplicate retries, track reads
  await request(app,'DELETE','/api/account',{password:credentials('').password,confirm:'탈퇴'},b.cookie);
  assert.equal((await inbox()).body.unread,0);
 });
+
+test('search combines literal method and inclusive fishing-date bounds with existing visibility and pagination',async t=>{
+ const app=createApp({database:':memory:'});t.after(app.close);
+ const a=await request(app,'POST','/api/signup',credentials('period-search@example.test'));
+ const b=await request(app,'POST','/api/signup',credentials('period-search-b@example.test'));
+ const ids=[];
+ for(const fishing_date of ['2024-02-29','2026-11-16','2026-11-17','2026-11-18'])ids.push((await request(app,'POST','/api/posts',{...post,method:'루어_%',fishing_date},a.cookie)).body.post.id);
+ await request(app,'POST','/api/posts',{...post,method:'원투'},a.cookie);
+ const find=async query=>(await request(app,'GET','/api/posts?'+query,undefined,b.cookie));
+ const range='fish='+encodeURIComponent('농')+'&region='+encodeURIComponent('강릉')+'&method='+encodeURIComponent('루어_%')+'&date_from=2026-11-16&date_to=2026-11-17';
+ const result=await find(range);assert.equal(result.status,200);assert.deepEqual(result.body.posts.map(p=>p.id),[ids[2],ids[1]]);
+ assert.equal((await find(range+'&before='+ids[2])).body.posts.length,1);
+ assert.equal((await find('date_from=2026-11-18')).body.posts.length,1);
+ assert.equal((await find('date_to=2024-02-29')).body.posts.length,1);
+ assert.equal((await find('method=%25')).body.posts.length,4);
+ for(const query of ['date_from=2025-02-29','date_to=2026-11-31','date_from=oops','date_from=2026-11-18&date_to=2026-11-17'])assert.equal((await find(query)).status,400);
+ await request(app,'PUT','/api/blocks/'+a.body.user.id,{},b.cookie);assert.equal((await find(range)).body.posts.length,0);
+});

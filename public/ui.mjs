@@ -4,7 +4,7 @@ export function parseRoute(hash='') {
 }
 export function searchPath(params) {
   const query=new URLSearchParams();
-  for(const key of ['fish','region']){const value=(params.get(key)||'').trim();if(value)query.set(key,value);}
+  for(const key of ['fish','region','method','date_from','date_to']){const value=(params.get(key)||'').trim();if(value)query.set(key,value);}
   return '/posts'+(query.size?'?'+query:'');
 }
 export function navigationSection(route) {
@@ -42,5 +42,15 @@ export function photoSelectionError(files,existing=0,max=5) {
       return 'JPG·PNG·WebP 사진만 선택할 수 있어요. 동영상·GIF·RAW는 지원하지 않습니다.';
     }
   }
+  return '';
+}
+
+export function searchValidation(fields) {
+  for(const key of ['date_from','date_to']){
+    const value=fields[key]?.trim();
+    if(value&&(!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value).toISOString().slice(0,10)!==value))return '출조 기간의 날짜를 확인해주세요.';
+  }
+  const from=fields.date_from?.trim(),to=fields.date_to?.trim();
+  if(from&&to&&from>to)return '시작일은 종료일보다 늦을 수 없습니다.';
   return '';
 }

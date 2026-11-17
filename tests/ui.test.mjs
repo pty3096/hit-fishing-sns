@@ -39,3 +39,13 @@ test('photo picker explains iPhone formats, size and count without accepting dis
  assert.match(check([{...jpg,type:'image/gif'}]),/GIF/);
  assert.match(check([{...jpg,type:''}]),/JPG/);
 });
+
+test('extended search round-trips method and dates, validates impossible and reversed ranges',async()=>{
+ const {searchValidation:validate}=await import('../public/ui.mjs');
+ const fields={fish:'농어',region:'강릉',method:'루어 & 원투_%',date_from:'2024-02-29',date_to:'2026-11-17'};
+ const path=searchPath(new URLSearchParams(fields));
+ assert.deepEqual(Object.fromEntries(parseRoute('#search'+path.slice(path.indexOf('?'))).params),fields);
+ assert.equal(validate(fields),'');assert.equal(validate({date_from:'2024-02-29'}),'');assert.equal(validate({date_to:'2026-11-17'}),'');
+ assert.match(validate({date_from:'2025-02-29'}),/날짜/);assert.match(validate({date_to:'2026-11-31'}),/날짜/);
+ assert.match(validate({date_from:'2026-11-18',date_to:'2026-11-17'}),/시작일/);
+});

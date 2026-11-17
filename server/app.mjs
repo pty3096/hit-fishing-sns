@@ -257,7 +257,12 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if (url.searchParams.get('following') === '1') { auth(); clauses.push('p.user_id IN (SELECT target_id FROM follows WHERE follower_id=?)'); values.push(user.id); }
         if(url.searchParams.get('saved')==='1'){auth();clauses.push('p.id IN (SELECT post_id FROM saved_posts WHERE user_id=?)');values.push(user.id);}
         const author = Number(url.searchParams.get('author')); if (author > 0) { clauses.push('p.user_id=?'); values.push(author); }
-        for (const field of ['fish', 'region']) { const v = url.searchParams.get(field)?.trim(); if (v) { clauses.push(`p.${field} LIKE ? ESCAPE '\\'`); values.push('%'+v.slice(0,80).replace(/[\\%_]/g,'\\$&')+'%'); } }
+        for (const field of ['fish', 'region', 'method']) { const v = url.searchParams.get(field)?.trim(); if (v) { clauses.push(`p.${field} LIKE ? ESCAPE '\\'`); values.push('%'+v.slice(0,80).replace(/[\\%_]/g,'\\$&')+'%'); } }
+        const from=url.searchParams.get('date_from')?.trim(),to=url.searchParams.get('date_to')?.trim();
+        for(const value of [from,to])if(value&&(!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value).toISOString().slice(0,10)!==value))fail(400,'출조 기간의 날짜를 확인해주세요.');
+        if(from&&to&&from>to)fail(400,'시작일은 종료일보다 늦을 수 없습니다.');
+        if(from){clauses.push('p.fishing_date>=?');values.push(from);}
+        if(to){clauses.push('p.fishing_date<=?');values.push(to);}
         const before = Number(url.searchParams.get('before'));
         if (before > 0) { clauses.push('p.id<?'); values.push(before); }
         const rows = db.prepare(select + (clauses.length ? ' WHERE ' + clauses.join(' AND ') : '') + ' ORDER BY p.id DESC LIMIT 21').all(...values);
