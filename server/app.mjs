@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {moderation} from './moderation.mjs';
 import { normalizePhotos, MAX_POST_BYTES } from './photos.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, scrypt, timingSafeEqual } from 'node:crypto';
@@ -15,7 +16,7 @@ const text = (value, max, label) => {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > max) fail(400, `${label}을 확인해주세요.`);
   return value.trim();
 };
-const publicUser = u => u ? { id: u.id, nickname: u.nickname, bio: u.bio } : null;
+const publicUser = u => u ? { id: u.id, nickname: u.nickname, bio: u.bio, is_admin: !!u.is_admin, suspended: !!u.suspended } : null;
 
 export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin = 'http://127.0.0.1:3000', secure = false } = {}) {
   if (database !== ':memory:') mkdirSync(dirname(database), { recursive: true, mode: 0o700 });
@@ -34,6 +35,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
     CREATE TABLE IF NOT EXISTS follows (id INTEGER PRIMARY KEY AUTOINCREMENT, follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, target_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, UNIQUE(follower_id,target_id), CHECK(follower_id != target_id));
     CREATE INDEX IF NOT EXISTS follows_target ON follows(target_id,id);
     PRAGMA user_version=2;`);
+  const mod = moderation(db);
   const limits = new Map();
   const cookie = token => `hit_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${token ? 604800 : 0}${secure ? '; Secure' : ''}`;
   const sessionUser = req => {
@@ -57,7 +59,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         res.end(readFileSync(resolve(root, 'public', file[0]))); return;
       }
       const user = sessionUser(req);
-      const auth = () => { if (!user) fail(401, '로그인이 필요합니다.'); return user; };
+      const auth = () => { const current=user && db.prepare('SELECT * FROM users WHERE id=?').get(user.id); if (!current) fail(401, '로그인이 필요합니다.'); if(current.suspended)fail(403,'이용이 제한된 계정입니다.'); return current; };
       let body = {};
       if (!['GET', 'HEAD'].includes(method)) {
         if (req.headers.origin !== origin) fail(403, '허용되지 않은 요청 출처입니다.');
@@ -71,6 +73,12 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         try { body = JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch { fail(400, '요청 내용을 확인해주세요.'); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) fail(400, '요청 형식이 올바르지 않습니다.');
       }
+      const verifyPassword = async (account,password) => {
+        if(typeof password!=='string'||password.length>128)return false;
+        const candidate=await derive(password,account.salt,64);
+        return timingSafeEqual(candidate,Buffer.from(account.password_hash,'hex'));
+      };
+      if(await mod.route({path,method,body,user,auth,send,req,res,verifyPassword}))return;
       if (path === '/api/me' && method === 'GET') return send(200, { user: publicUser(user) });
       if (['/api/signup', '/api/login'].includes(path) && method === 'POST') {
         const key = req.socket.remoteAddress || 'local', now = Date.now();
@@ -86,12 +94,14 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
           if (account) fail(409, '이미 등록된 이메일입니다.');
           const salt = randomBytes(16).toString('hex'), hash = (await derive(body.password, salt, 64)).toString('hex');
           // The uniqueness constraint also guards simultaneous signup requests.
-          try { const r = db.prepare('INSERT INTO users(email,nickname,salt,password_hash) VALUES(?,?,?,?)').run(email, nickname, salt, hash); account = db.prepare('SELECT * FROM users WHERE id=?').get(Number(r.lastInsertRowid)); }
+          try { const r = db.prepare('INSERT INTO users(id,email,nickname,salt,password_hash) VALUES(?,?,?,?,?)').run(mod.nextId('users'),email, nickname, salt, hash); account = db.prepare('SELECT * FROM users WHERE id=?').get(Number(r.lastInsertRowid)); }
           catch (err) { if (err.code?.startsWith('ERR_SQLITE') && db.prepare('SELECT id FROM users WHERE email=?').get(email)) fail(409, '이미 등록된 이메일입니다.'); throw err; }
         } else {
           const candidate = await derive(body.password, account?.salt || 'dummy-salt-for-missing-account', 64);
           if (!account || !timingSafeEqual(candidate, Buffer.from(account.password_hash, 'hex'))) fail(401, '이메일 또는 비밀번호를 확인해주세요.');
         }
+        account=db.prepare('SELECT * FROM users WHERE id=?').get(account.id);
+        if(!account)fail(401,'계정이 없습니다.');
         const token = randomBytes(32).toString('hex');
         db.prepare('DELETE FROM sessions WHERE expires<=?').run(Date.now());
         const old = (req.headers.cookie || '').match(/(?:^|;\s*)hit_session=([a-f0-9]{64})(?:;|$)/)?.[1];
@@ -114,11 +124,12 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         photos: db.prepare('SELECT id,width,height FROM photos WHERE post_id=? ORDER BY position').all(p.id).map(photo => ({ ...photo, url: '/api/photos/' + photo.id })),
         likes: db.prepare('SELECT count(*) n FROM likes WHERE post_id=?').get(p.id).n,
         liked: !!(user && db.prepare('SELECT 1 FROM likes WHERE post_id=? AND user_id=?').get(p.id,user.id)),
-        comment_count: db.prepare('SELECT count(*) n FROM comments WHERE post_id=?').get(p.id).n });
+        comment_count: db.prepare(`SELECT count(*) n FROM comments c WHERE c.post_id=? AND ${mod.visibleSQL('c',user?.id)}`).get(p.id).n });
       const select = 'SELECT p.*,u.nickname FROM posts p JOIN users u ON u.id=p.user_id';
       const photoMatch = path.match(/^\/api\/photos\/([a-f0-9]{32})$/);
       if (photoMatch && method === 'GET') {
-        const photo = db.prepare('SELECT data FROM photos WHERE id=?').get(photoMatch[1]);
+        const photo = db.prepare('SELECT data,post_id FROM photos WHERE id=?').get(photoMatch[1]);
+        if(photo && !mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(photo.post_id),user))fail(404,'사진이 없습니다.');
         if (!photo) fail(404, '사진이 없습니다.');
         res.setHeader('Content-Type','image/webp'); res.end(Buffer.from(photo.data)); return;
       }
@@ -126,7 +137,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       if (userMatch) {
         const target = Number(userMatch[1]), action = userMatch[2];
         const person = db.prepare('SELECT id,nickname,bio FROM users WHERE id=?').get(target);
-        if (!person) fail(404, '사용자가 없습니다.');
+        if (!person || !mod.userVisible(target,user)) fail(404, '사용자가 없습니다.');
         if (action === 'follow' && ['PUT','DELETE'].includes(method)) {
           auth(); if (target === user.id) fail(400, '자신을 팔로우할 수 없습니다.');
           if (method === 'PUT') db.prepare('INSERT OR IGNORE INTO follows(follower_id,target_id) VALUES(?,?)').run(user.id,target);
@@ -140,14 +151,14 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if (['followers','following'].includes(action) && method === 'GET') {
           const followers = action === 'followers';
           const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
-          const rows = db.prepare(`SELECT f.id AS cursor,u.id,u.nickname,u.bio FROM follows f JOIN users u ON u.id=f.${followers ? 'follower_id' : 'target_id'} WHERE f.${followers ? 'target_id' : 'follower_id'}=? AND f.id<? ORDER BY f.id DESC LIMIT 21`).all(target,before);
+          const rows = db.prepare(`SELECT f.id AS cursor,u.id,u.nickname,u.bio FROM follows f JOIN users u ON u.id=f.${followers ? 'follower_id' : 'target_id'} WHERE f.${followers ? 'target_id' : 'follower_id'}=? AND f.id<? AND u.suspended=0 AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.blocker_id=${Number(user?.id||0)} AND b.target_id=u.id) OR (b.target_id=${Number(user?.id||0)} AND b.blocker_id=u.id)) ORDER BY f.id DESC LIMIT 21`).all(target,before);
           return send(200, { users: rows.slice(0,20), next: rows.length > 20 ? rows[19].cursor : null });
         }
       }
       const interaction = path.match(/^\/api\/posts\/(\d+)\/(like|comments)$/);
       if (interaction) {
         const postId = Number(interaction[1]), action = interaction[2];
-        if (!db.prepare('SELECT 1 FROM posts WHERE id=?').get(postId)) fail(404, '게시물이 없습니다.');
+        if (!mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(postId),user)) fail(404, '게시물이 없습니다.');
         if (action === 'like' && ['PUT','DELETE'].includes(method)) {
           auth(); if (method === 'PUT') db.prepare('INSERT OR IGNORE INTO likes VALUES(?,?)').run(user.id,postId);
           else db.prepare('DELETE FROM likes WHERE user_id=? AND post_id=?').run(user.id,postId);
@@ -155,7 +166,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         }
         if (action === 'comments' && method === 'GET') {
           const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
-          const rows = db.prepare('SELECT c.*,u.nickname FROM comments c JOIN users u ON c.user_id=u.id WHERE c.post_id=? AND c.id<? ORDER BY c.id DESC LIMIT 21').all(postId,before);
+          const rows = db.prepare(`SELECT c.*,u.nickname FROM comments c JOIN users u ON c.user_id=u.id WHERE c.post_id=? AND c.id<? AND ${mod.visibleSQL('c',user?.id)} ORDER BY c.id DESC LIMIT 21`).all(postId,before);
           return send(200, { comments: rows.slice(0,20), next: rows.length > 20 ? rows[19].id : null });
         }
         if (action === 'comments' && method === 'POST') {
@@ -172,7 +183,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         db.prepare('DELETE FROM comments WHERE id=?').run(Number(commentMatch[1])); return send(200,{ok:true});
       }
       if (path === '/api/posts' && method === 'GET') {
-        const clauses = [], values = [];
+        const clauses = [mod.visibleSQL('p',user?.id)], values = [];
         if (url.searchParams.get('mine') === '1') { auth(); clauses.push('p.user_id=?'); values.push(user.id); }
         if (url.searchParams.get('following') === '1') { auth(); clauses.push('p.user_id IN (SELECT target_id FROM follows WHERE follower_id=?)'); values.push(user.id); }
         const author = Number(url.searchParams.get('author')); if (author > 0) { clauses.push('p.user_id=?'); values.push(author); }
@@ -183,10 +194,10 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         const posts = rows.slice(0, 20).map(decorate); return send(200, { posts, next: rows.length > 20 ? posts.at(-1).id : null });
       }
       const match = path.match(/^\/api\/posts\/(\d+)$/), id = match ? Number(match[1]) : null;
-      if (match && method === 'GET') { const post = db.prepare(select + ' WHERE p.id=?').get(id); if (!post) fail(404, '게시물이 없습니다.'); return send(200, { post: decorate(post) }); }
+      if (match && method === 'GET') { const post = db.prepare(select + ' WHERE p.id=?').get(id); if (!mod.postVisible(post,user)) fail(404, '게시물이 없습니다.'); return send(200, { post: decorate(post) }); }
       if ((path === '/api/posts' && method === 'POST') || (match && method === 'PATCH')) {
         auth();
-        if (id) { const old = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id); if (!old) fail(404, '게시물이 없습니다.'); if (old.user_id !== user.id) fail(403, '본인의 게시물만 수정할 수 있습니다.'); }
+        if (id) { const old = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id); if (!old) fail(404, '게시물이 없습니다.'); if (old.user_id !== user.id) fail(403, '본인의 게시물만 수정할 수 있습니다.'); if(!mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(id),user))fail(403,'숨김 처리된 게시물은 수정할 수 없습니다.'); }
         const fields = [text(body.title, 60, '제목'), text(body.body, 2000, '내용'), text(body.fish, 30, '어종'), text(body.region, 50, '지역'), text(body.method, 30, '낚시 방식')];
         const date = text(body.fishing_date, 10, '출조일');
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) fail(400, '출조일을 확인해주세요.');
@@ -204,12 +215,14 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         let savedId = id;
         db.exec('BEGIN IMMEDIATE');
         try {
+          auth();
           if (id) {
             const current = db.prepare('SELECT user_id FROM posts WHERE id=?').get(id);
             if (!current) fail(404,'게시물이 없습니다.');
             if (current.user_id !== user.id) fail(403,'본인의 게시물만 수정할 수 있습니다.');
+            if(!mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(id),user))fail(403,'숨김 처리된 게시물은 수정할 수 없습니다.');
             db.prepare('UPDATE posts SET title=?,body=?,fish=?,region=?,method=?,fishing_date=? WHERE id=?').run(...fields,date,id);
-          } else savedId = Number(db.prepare('INSERT INTO posts(user_id,title,body,fish,region,method,fishing_date,created_at) VALUES(?,?,?,?,?,?,?,?)').run(user.id,...fields,date,new Date().toISOString()).lastInsertRowid);
+          } else savedId = Number(db.prepare('INSERT INTO posts(id,user_id,title,body,fish,region,method,fishing_date,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(mod.nextId('posts'),user.id,...fields,date,new Date().toISOString()).lastInsertRowid);
           if (photos) {
             db.prepare('DELETE FROM photos WHERE post_id=?').run(savedId);
             photos.forEach((photo,position) => db.prepare('INSERT INTO photos VALUES(?,?,?,?,?,?)').run(randomBytes(16).toString('hex'),savedId,position,photo.data,photo.width,photo.height));
