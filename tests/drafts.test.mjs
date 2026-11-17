@@ -17,3 +17,9 @@ test('logout clears only own drafts; corrupt storage and unavailable storage are
  storage.setItem('hit-draft-v1:2:new','broken');assert.equal(d.read(2,'new'),null);
  const blocked=draftStore({setItem(){throw Error();},getItem(){throw Error();}});assert.equal(blocked.write(1,'new',{}),false);assert.equal(blocked.read(1,'new'),null);blocked.clear(1);
 });
+
+test('community and catch drafts do not overwrite each other',()=>{
+ const storage=memory(),d=draftStore(storage);d.write(1,'new',{title:'조황'});d.write(1,'new-community',{title:'질문',body:'낚시 이야기'});
+ assert.equal(d.read(1,'new').title,'조황');assert.equal(d.read(1,'new-community').title,'질문');
+ d.remove(1,'new-community');assert.equal(d.read(1,'new').title,'조황');
+});

@@ -13,6 +13,8 @@ Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 
 
 ## 자료
 
+- [커뮤니티 글쓰기·목록·권한](docs/24_COMMUNITY.md)
+
 - [낚시 방식·출조 기간 검색](docs/23_SEARCH_FILTERS.md)
 
 - [댓글·좋아요·팔로우 앱 안 알림](docs/22_NOTIFICATIONS.md)
