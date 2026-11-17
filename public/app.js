@@ -1,4 +1,8 @@
 import {parseRoute,searchPath,navigationSection,canWrite,emptyMessage,galleryPosition} from './ui.mjs';
+import {draftStore,draftFields} from './drafts.mjs';
+let drafts;try{drafts=draftStore(sessionStorage);}catch{drafts=draftStore(null);}
+let editor=null,activeHash=location.hash;
+addEventListener('beforeunload',event=>{if(editor?.dirty()){editor.save();event.preventDefault();event.returnValue='';}});
 const main = document.querySelector('#main');
 let meta = {development_mail:false,verification_required:true,production:false};
 let me = null, returnTo = 'profile', generation = 0;
@@ -55,6 +59,7 @@ function showList(target,result,morePath,kind='home',append=false) {
 async function render({focus=false}={}) {
   const current=++generation;const {route,params}=parseRoute(location.hash);
   main.setAttribute('aria-busy','true');
+  editor=null;
   cleanupPreviews();
   main.innerHTML = '<section class="card" role="status">기록을 불러오고 있어요…</section>';
   try {
@@ -102,9 +107,31 @@ async function render({focus=false}={}) {
       const p = id ? (await api('/posts/' + id)).post : {};
       if (current !== generation) return;
       if (id && p.user_id !== me.id) throw new Error('본인의 게시물만 수정할 수 있습니다.');
-      main.innerHTML = `<a class="back" href="#home">← 피드로</a><h1>${id ? '조황 수정하기' : '오늘의 조황 남기기'}</h1><section class="card"><p class="muted">사진과 함께 오늘의 한 수를 기록해요. 사진의 위치 정보는 저장 시 제거됩니다.</p><form id="post-form" class="form"><label for="photos">조황 사진 (최대 5장, 장당 10MB)</label><input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple><p class="field-help">JPG·PNG·WebP · 사진을 선택한 뒤 개별 삭제할 수 있습니다.</p><div id="photo-preview" class="photo-preview"></div>${[['title', '제목', 60], ['fish', '어종', 30], ['region', '지역 (시·군·구)', 50], ['method', '낚시 방식', 30]].map(([name, label, max]) => `<label for="${name}">${label}</label><input id="${name}" name="${name}" value="${esc(p[name])}" maxlength="${max}" required>`).join('')}<label for="fishing_date">출조일</label><input id="fishing_date" name="fishing_date" type="date" value="${esc(p.fishing_date)}" required><label for="body">이야기</label><textarea id="body" name="body" maxlength="2000" required>${esc(p.body)}</textarea>${formError}<button class="primary" type="submit">${id ? '수정 저장' : '조황 등록'}</button></form></section>`;
+      main.innerHTML = `<a class="back" href="#home">← 피드로</a><h1>${id ? '조황 수정하기' : '오늘의 조황 남기기'}</h1><section class="card"><p class="muted">사진과 함께 오늘의 한 수를 기록해요. 사진의 위치 정보는 저장 시 제거됩니다.</p><p id="draft-status" class="field-help" role="status">글은 이 탭에 24시간 임시 저장됩니다. 탭을 닫으면 사라집니다. 사진과 사진 삭제·순서 변경은 임시 저장되지 않습니다.</p><div id="draft-offer" hidden><p>작성 중이던 임시 글이 있어요. 이어쓰려면 사진은 다시 확인해주세요.</p><button type="button" id="draft-restore">이어쓰기</button><button type="button" id="draft-discard">임시 글 삭제</button></div><form id="post-form" class="form"><label for="photos">조황 사진 (최대 5장, 장당 10MB)</label><input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple><p class="field-help">JPG·PNG·WebP · 사진을 선택한 뒤 개별 삭제할 수 있습니다.</p><div id="photo-preview" class="photo-preview"></div>${[['title', '제목', 60], ['fish', '어종', 30], ['region', '지역 (시·군·구)', 50], ['method', '낚시 방식', 30]].map(([name, label, max]) => `<label for="${name}">${label}</label><input id="${name}" name="${name}" value="${esc(p[name])}" maxlength="${max}" required>`).join('')}<label for="fishing_date">출조일</label><input id="fishing_date" name="fishing_date" type="date" value="${esc(p.fishing_date)}" required><label for="body">이야기</label><textarea id="body" name="body" maxlength="2000" required>${esc(p.body)}</textarea>${formError}<button class="primary" type="submit">${id ? '수정 저장' : '조황 등록'}</button></form></section>`;
       let selectedPhotos = (p.photos || []).map(photo => ({ id:photo.id, url:photo.url }));
       const originalCount = selectedPhotos.length;
+      const owner=me.id,key=id||'new',form=document.querySelector('#post-form'),status=document.querySelector('#draft-status');
+      const values=()=>draftFields(Object.fromEntries(new FormData(form)));
+      let baseline=JSON.stringify(values()),photoBaseline=JSON.stringify(selectedPhotos.map(photo=>photo.id));
+      const saved=drafts.read(owner,key);
+      let pending=saved;
+      const save=()=>{
+        // Preserve an offered draft until the writer explicitly chooses whether to restore it.
+        if(pending)return false;
+        const text=values();
+        if(JSON.stringify(text)===baseline){drafts.remove(owner,key);return true;}
+        const ok=drafts.write(owner,key,text);
+        status.textContent=ok?'글 임시 저장됨 · 이 탭에서 24시간 · 사진은 다시 선택해야 합니다.':'임시 저장할 수 없습니다. 화면을 나가기 전에 글을 복사해주세요.';
+        return ok;
+      };
+      editor={save,dirty:()=>JSON.stringify(values())!==baseline||JSON.stringify(selectedPhotos.map(photo=>photo.id||'new'))!==photoBaseline};
+      form.addEventListener('input',event=>{if(!Object.hasOwn(draftFields(),event.target.name))return;pending=null;document.querySelector('#draft-offer').hidden=true;save();});
+      if(saved){
+        document.querySelector('#draft-offer').hidden=false;
+        document.querySelector('#draft-restore').onclick=()=>{for(const [name,value] of Object.entries(saved))form.elements.namedItem(name).value=value;pending=null;document.querySelector('#draft-offer').hidden=true;save();toast('글을 이어씁니다. 사진을 확인해주세요.');};
+        document.querySelector('#draft-discard').onclick=()=>{drafts.remove(owner,key);pending=null;document.querySelector('#draft-offer').hidden=true;toast('임시 글을 삭제했습니다.');};
+      }
+
       const previews = () => {
         const container = document.querySelector('#photo-preview'); container.replaceChildren();
         selectedPhotos.forEach((photo,index) => {
@@ -130,7 +157,7 @@ async function render({focus=false}={}) {
           try { data.photos = await Promise.all(selectedPhotos.map(async photo => photo.id ? {id:photo.id} : {data:await fileBase64(photo.file)})); }
           finally { submit.textContent = id ? '수정 저장' : '조황 등록'; }
         }
-        const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); if(stillHere())location.hash='post/'+post.id;toast('조황을 저장했습니다.'); });
+        const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); if(stillHere()||JSON.stringify(drafts.read(owner,key))===JSON.stringify(draftFields(data)))drafts.remove(owner,key);if(stillHere()){editor=null;location.hash='post/'+post.id;}toast('조황을 저장했습니다.'); });
     } else if (/^post\/\d+$/.test(route)) {
       const { post: p } = await api('/posts/' + route.split('/')[1]); if (current !== generation) return;
       main.innerHTML = `<a class="back" href="#home">← 피드로</a><article class="card"><div class="eyebrow">FISHING JOURNAL</div><h1>${esc(p.title)}</h1><p class="muted"><a href="#user/${p.user_id}">${esc(p.nickname)}</a> · ${esc(p.fishing_date)}</p>${photoGallery(p)}<p><span class="tag">${esc(p.region)}</span><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span></p><p class="content">${esc(p.body)}</p>${me?.id === p.user_id ? `<div class="actions"><a href="#edit/${p.id}">수정</a><button id="delete-post">삭제</button></div><div id="confirm-delete" hidden><p>이 조황을 삭제할까요? 삭제 후 복구할 수 없습니다.</p><button id="delete-yes">삭제하기</button><button id="delete-no">취소</button><p class="error" role="alert" hidden></p></div>` : ''}</article><section class="card"><div class="actions">${likeButton(p)}<a href="#user/${p.user_id}">작성자 프로필 →</a>${me?.id!==p.user_id ? `<a href="#report/post/${p.id}">게시물 신고</a>` : ''}</div></section><section class="card"><h2>이야기를 나눠요</h2>${canWrite(me,meta)?`<form id="comment-form" class="form"><label for="comment">댓글</label><textarea id="comment" name="body" maxlength="300" required placeholder="따뜻한 한마디를 남겨주세요"></textarea>${formError}<button class="primary" type="submit">댓글 등록</button></form>`:`<p class="muted">${!me?'로그인하고 이야기를 나눠보세요.':me.suspended?'이용 제한 상태에서는 댓글을 남길 수 없습니다.':'이메일 인증 후 댓글을 남길 수 있어요.'}</p><a class="primary" href="${me?'#settings':'#login'}" data-login-return="${esc(route)}">${me?'계정 설정 확인':'로그인하기 →'}</a>`}<div id="comments"></div></section>`;
@@ -151,7 +178,7 @@ async function render({focus=false}={}) {
       const mine = me?.id === userId;
       main.innerHTML = `<section class="card"><div class="profile">${avatar(person)}<div><span class="eyebrow">FISHING JOURNAL</span><h1>${esc(person.nickname)}</h1><p class="content">${esc(person.bio || '나만의 낚시 이야기를 남겨보세요.')}</p></div></div><div class="stats"><a href="#user/${userId}/followers"><strong>${person.followers}</strong>팔로워</a><a href="#user/${userId}/following"><strong>${person.following}</strong>팔로잉</a></div>${mine ? '<a href="#profile-edit">프로필 편집 →</a> · <a href="#settings">설정</a><button id="logout">로그아웃</button>' : `<button id="follow" aria-pressed="${person.followed}">${person.followed ? '팔로잉 취소' : '＋ 팔로우'}</button><div class="actions"><a href="#report/user/${userId}">사용자 신고</a><button id="block">사용자 차단</button></div><div id="block-confirm" hidden><p>서로의 글·댓글이 숨겨지고 팔로우 관계가 해제됩니다.</p><button id="block-yes">차단하기</button><button id="block-no">취소</button></div>`}</section><h2>${mine ? '내 조황 기록' : '조황 기록'}</h2><div id="posts"></div>`;
       showList('#posts',result,'/posts?author='+userId,mine?'mine':'author');
-      if (mine) document.querySelector('#logout').onclick = async () => { try { await api('/logout', 'POST', {}); me = null; location.hash = 'home'; toast('로그아웃했습니다.'); } catch (e) { toast(e.message); } };
+      if (mine) document.querySelector('#logout').onclick = async () => { try { await api('/logout', 'POST', {}); drafts.clear(me.id);me = null; location.hash = 'home'; toast('로그아웃했습니다.'); } catch (e) { toast(e.message); } };
       else document.querySelector('#follow').onclick = async event => { if (!guardWrite(route)) return; event.target.disabled=true; try { await api('/users/'+userId+'/follow', person.followed ? 'DELETE' : 'PUT', {}); render(); } catch (e) { toast(e.message); event.target.disabled=false; } };
       if (!mine) {
         document.querySelector('#block').onclick=()=>{if(guardWrite(route))document.querySelector('#block-confirm').hidden=false;};
@@ -175,7 +202,7 @@ async function render({focus=false}={}) {
       const resend=document.querySelector('#resend-email');if(resend)resend.onclick=async()=>{resend.disabled=true;try{const r=await api('/email/resend','POST',{});toast(r.message);}catch(e){toast(e.message);}finally{resend.disabled=false;}};
       await loadBlocked();
       if(current!==generation)return;
-      formAction('withdraw',async data=>{await api('/account','DELETE',data);me=null;returnTo='profile';location.hash='home';toast('계정과 작성 자료를 삭제했습니다.');});
+      formAction('withdraw',async data=>{await api('/account','DELETE',data);drafts.clear(me.id);me=null;returnTo='profile';location.hash='home';toast('계정과 작성 자료를 삭제했습니다.');});
     } else if (route === 'admin') {
       if(!guard(route))return;
       if(!me.is_admin)throw new Error('운영자 권한이 필요합니다.');
@@ -265,5 +292,14 @@ main.addEventListener('click',event=>{const button=event.target.closest('[data-g
 main.addEventListener('scroll',event=>{if(event.target.classList?.contains('gallery-track'))updateGallery(event.target);},true);
 main.addEventListener('keydown',event=>{if(event.target.classList?.contains('gallery-track')&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();moveGallery(event.target,event.key==='ArrowLeft'?-1:1);}});
 document.querySelector('#skip-link').onclick=event=>{event.preventDefault();main.focus();};
-addEventListener('hashchange',()=>{render({focus:true});window.scrollTo(0,0);});
+addEventListener('hashchange',()=>{
+  if(location.hash===activeHash)return;
+  if(editor?.dirty()){
+    const saved=editor.save();
+    if(!confirm(saved?'작성 중인 글은 이 탭에 임시 저장됩니다. 사진 변경은 저장되지 않습니다. 이동할까요?':'임시 저장하지 못했습니다. 이동하면 작성 내용을 잃을 수 있습니다. 이동할까요?')){
+      history.replaceState(null,'',location.pathname+location.search+activeHash);return;
+    }
+  }
+  activeHash=location.hash;render({focus:true});window.scrollTo(0,0);
+});
 render();
