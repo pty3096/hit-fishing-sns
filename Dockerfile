@@ -5,6 +5,7 @@ RUN npm ci --omit=dev
 COPY server ./server
 COPY public ./public
 COPY tests ./tests
+COPY scripts ./scripts
 RUN npm test
 
 FROM node:24-bookworm-slim
@@ -14,6 +15,7 @@ COPY --from=verify /app/node_modules ./node_modules
 COPY --from=verify /app/package.json ./package.json
 COPY --from=verify /app/server ./server
 COPY --from=verify /app/public ./public
+COPY --from=verify /app/scripts ./scripts
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 EXPOSE 3000
