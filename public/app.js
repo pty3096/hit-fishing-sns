@@ -66,7 +66,7 @@ async function render({focus=false}={}) {
     const [session,configuration]=await Promise.all([api('/me'),api('/meta')]);
     if(current!==generation)return;
     me=session.user;meta=configuration;
-    document.querySelector('.notice').textContent=meta.production?'히트 HIT · 낚시의 순간을 함께':'개발 버전 · 이 PC에 기록을 저장합니다 · 메일 발송 연결 전 로컬 검증';
+    document.querySelector('.notice').textContent=meta.phone_preview?'아이폰 시범 버전 · 별도 테스트 기록 · 인증 안내는 개발용 메일함에서 확인':meta.production?'히트 HIT · 낚시의 순간을 함께':'개발 버전 · 이 PC에 기록을 저장합니다 · 메일 발송 연결 전 로컬 검증';
     const authStatus=document.querySelector('#auth-status');authStatus.hidden=!me||me.email_verified||!meta.verification_required;authStatus.innerHTML='이메일 인증을 완료하면 글 작성과 소통 기능을 이용할 수 있어요. <a href="#settings">인증 안내 →</a>';
     const account = document.querySelector('#account'); account.textContent = me ? `${me.nickname} →` : '로그인 →'; account.href = me ? '#profile' : '#login';
     document.querySelectorAll('.navlink,.bottom a').forEach(a=>{const section=navigationSection(route);const target=a.classList.contains('navlink')&&route==='settings'?'settings':section;const active=a.hash==='#'+target;a.classList.toggle('active',active);if(active)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
