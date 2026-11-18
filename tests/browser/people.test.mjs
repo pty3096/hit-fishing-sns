@@ -1,0 +1,108 @@
+import test,{before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import {mkdtempSync,rmSync,mkdirSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {chromium} from 'playwright-core';
+import {createApp} from '../../server/app.mjs';
+
+// Isolated fixtures only: never connect these tests to the developer or phone-preview database.
+const password='Only-local-ui-check-87651';
+let folder,app,server,browser,origin,author;
+const errors=[];
+before(async()=>{
+  folder=mkdtempSync(join(tmpdir(),'hit-browser-fixture-'));
+  const database=join(folder,'fixture.sqlite');
+  server=http.createServer((req,res)=>app.handle(req,res));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  origin='http://127.0.0.1:'+server.address().port;
+  app=createApp({database,origin});
+  for(const [email,nickname] of [['ui-author@example.test','화면검증 낚시인'],['ui-viewer@example.test','화면검증 동료']]){
+    const response=await fetch(origin+'/api/signup',{method:'POST',headers:{origin,'Content-Type':'application/json'},body:JSON.stringify({email,password,nickname})});
+    assert.equal(response.status,201);
+    const account=await response.json();if(email==='ui-author@example.test')author=account.user.id;
+  }
+  const db=new DatabaseSync(database);
+  db.exec('UPDATE users SET email_verified=1');
+  db.prepare('UPDATE users SET bio=? WHERE id=?').run('<b>실제 사용자가 아닌 화면 검증용 소개</b>',author);
+  db.close();
+  browser=await chromium.launch({channel:process.env.HIT_BROWSER_CHANNEL||'chrome',headless:true});
+});
+after(async()=>{
+  await browser?.close();
+  if(server)await new Promise(resolve=>server.close(resolve));
+  if(app){await app.drainMail();app.close();}
+  if(folder)rmSync(folder,{recursive:true,force:true});
+});
+async function context(t,viewport={width:1280,height:900}){
+  const context=await browser.newContext({viewport,locale:'ko-KR'});
+  t.after(()=>context.close());
+  const page=await context.newPage();
+  page.on('pageerror',error=>errors.push(error.message));
+  return page;
+}
+async function findPeople(page){
+  await page.goto(origin+'/#people');
+  await page.getByRole('heading',{name:'닉네임으로 만나보세요.',exact:true}).waitFor();
+  await page.getByLabel('닉네임',{exact:true}).fill('화면검증');
+  await page.getByRole('button',{name:'낚시인 검색',exact:true}).click();
+  await page.locator('.people-result').first().waitFor();
+  assert.equal(await page.locator('.people-result').count(),2);
+}
+
+test('nickname search handles empty, literal profile text, no matches, clear and history',async t=>{
+  const page=await context(t);await findPeople(page);
+  assert.equal(await page.locator('.people-result b').count(),0);
+  assert.ok((await page.locator('.people-result .content').allTextContents()).some(text=>text.includes('<b>실제 사용자가')));
+  await page.getByRole('link',{name:'화면검증 낚시인',exact:true}).click();
+  await page.getByRole('heading',{name:'화면검증 낚시인',exact:true}).waitFor();
+  await page.goBack();await page.locator('.people-result').first().waitFor();
+  assert.equal(await page.getByLabel('닉네임',{exact:true}).inputValue(),'화면검증');
+  await page.getByLabel('닉네임',{exact:true}).fill('없는사용자닉네임');
+  await page.getByRole('button',{name:'낚시인 검색',exact:true}).click();
+  await page.getByRole('heading',{name:'일치하는 낚시인이 없어요.',exact:true}).waitFor();
+  await page.getByRole('link',{name:'검색 지우기',exact:true}).click();
+  await page.getByRole('heading',{name:'닉네임으로 만나보세요.',exact:true}).waitFor();
+  await page.getByLabel('닉네임',{exact:true}).fill('   ');
+  await page.getByRole('button',{name:'낚시인 검색',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'검색할 닉네임을 입력해주세요.'}).waitFor();
+});
+
+test('guest follow asks for login, returns to profile and reflects follow state in search',async t=>{
+  const page=await context(t);await findPeople(page);
+  await page.getByRole('link',{name:'화면검증 낚시인',exact:true}).click();
+  await page.locator('#follow').click();
+  await page.getByRole('heading',{name:'다시 만나 반가워요.',exact:true}).waitFor();
+  await page.getByLabel('이메일',{exact:true}).fill('ui-viewer@example.test');
+  await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);
+  await page.getByRole('button',{name:'로그인',exact:true}).click();
+  await page.getByRole('heading',{name:'화면검증 낚시인',exact:true}).waitFor();
+  assert.equal(await page.locator('#follow').getAttribute('aria-pressed'),'false');
+  await page.locator('#follow').click();
+  await page.locator('#follow[aria-pressed="true"]').waitFor();
+  await page.goto(origin+'/#people?q='+encodeURIComponent('화면검증'));
+  await page.locator('.people-result').first().waitFor();
+  assert.equal(await page.getByRole('link',{name:'팔로잉 중 · 프로필 보기 →',exact:true}).count(),1);
+  assert.equal(await page.getByRole('link',{name:'내 프로필 보기 →',exact:true}).count(),1);
+});
+
+test('home discovery and nickname results fit 320px and 390px without script errors',async t=>{
+  const page=await context(t);
+  for(const width of [320,390]){
+    await page.setViewportSize({width,height:844});
+    await page.goto(origin+'/#home');
+    await page.getByRole('link',{name:'함께할 낚시인 찾기 닉네임 검색 →',exact:true}).click();
+    await page.getByRole('heading',{name:'닉네임으로 만나보세요.',exact:true}).waitFor();
+    await page.getByLabel('닉네임',{exact:true}).fill('화면검증');
+    await page.getByRole('button',{name:'낚시인 검색',exact:true}).click();
+    await page.locator('.people-result').first().waitFor();
+    const layout=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth}));
+    assert.ok(layout.scroll<=layout.width,JSON.stringify(layout));
+    const button=page.getByRole('button',{name:'낚시인 검색',exact:true});
+    assert.ok((await button.boundingBox()).height>=44);
+    if(process.env.HIT_UI_SCREENSHOTS){mkdirSync(process.env.HIT_UI_SCREENSHOTS,{recursive:true});await page.screenshot({path:join(process.env.HIT_UI_SCREENSHOTS,`people-${width}.png`),fullPage:true});}
+  }
+  assert.deepEqual(errors,[]);
+});

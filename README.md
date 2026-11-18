@@ -7,11 +7,13 @@
 
 ## 앱 실행
 
-Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 `npm start`를 실행한 뒤 [로컬 앱](http://127.0.0.1:3000)을 엽니다. `npm test`로 핵심 동작을 검증합니다.
+Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 `npm start`를 실행한 뒤 [로컬 앱](http://127.0.0.1:3000)을 엽니다. `npm test`로 핵심 동작을 검증합니다. 개발 환경에서는 Chrome 설치 후 `npm run test:browser`로 별도 테스트 자료를 사용하는 화면 검사를 실행합니다. [화면 검사 실행 방법](docs/31_BROWSER_QA.md)을 참고해주세요.
 
 [이메일 인증과 개발용 메일함](docs/11_EMAIL_AUTH.md)을 먼저 확인해주세요. 기존 개발 계정도 인증 후 작성·소통 기능을 이용할 수 있습니다. [프로필 사진](docs/13_PROFILE_PHOTO.md)과 [배포 준비·백업](docs/12_DEPLOYMENT_PREP.md)도 정리했습니다. 실제 SMTP 연결·실사용 운영자 지정·공개 배포는 후속 작업입니다. 계정·조황·사진·메일·백업은 `data/`에 저장하며 GitHub에 올리지 않습니다.
 
 ## 자료
+
+- [브라우저 화면 검사·낚시인 찾기 검증](docs/31_BROWSER_QA.md)
 
 - [낚시인 닉네임 검색·공개 범위](docs/30_PEOPLE_SEARCH.md)
 
