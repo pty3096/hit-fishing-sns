@@ -49,3 +49,11 @@ test('extended search round-trips method and dates, validates impossible and rev
  assert.match(validate({date_from:'2025-02-29'}),/날짜/);assert.match(validate({date_to:'2026-11-31'}),/날짜/);
  assert.match(validate({date_from:'2026-11-18',date_to:'2026-11-17'}),/시작일/);
 });
+
+test('nickname search links preserve literal Korean queries and clear without exposing unrelated filters',async()=>{
+ const {peoplePath}=await import('../public/ui.mjs');
+ const query=' 바다 & 50%_\\? ';
+ const parsed=parseRoute(peoplePath(query));assert.equal(parsed.route,'people');assert.equal(parsed.params.get('q'),query.trim());
+ assert.equal(peoplePath('   '),'#people');assert.equal(peoplePath('친구',true),'/users?q='+encodeURIComponent('친구'));
+ assert.equal(navigationSection('people'),'people');
+});

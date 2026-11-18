@@ -198,6 +198,16 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if (!photo) fail(404, '사진이 없습니다.');
         res.setHeader('Content-Type','image/webp'); res.end(Buffer.from(photo.data)); return;
       }
+      if(path==='/api/users'&&method==='GET'){
+        const query=(url.searchParams.get('q')||'').trim();
+        if(query.length>30)fail(400,'닉네임은 30자 이내로 검색해주세요.');
+        const rawBefore=url.searchParams.get('before'),before=rawBefore===null?Number.MAX_SAFE_INTEGER:Number(rawBefore);
+        if(!Number.isSafeInteger(before)||before<1)fail(400,'다음 검색 위치를 확인해주세요.');
+        if(!query)return send(200,{users:[],next:null});
+        const pattern='%'+query.replace(/[\\%_]/g,'\\$&')+'%',viewer=user?.id||0;
+        const rows=db.prepare("SELECT u.id,u.nickname,u.bio,EXISTS(SELECT 1 FROM follows f WHERE f.follower_id=? AND f.target_id=u.id) AS followed FROM users u WHERE u.suspended=0 AND u.id<? AND u.nickname LIKE ? ESCAPE '\\' AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.blocker_id=? AND b.target_id=u.id) OR (b.target_id=? AND b.blocker_id=u.id)) ORDER BY u.id DESC LIMIT 21").all(viewer,before,pattern,viewer,viewer);
+        return send(200,{users:rows.slice(0,20).map(person=>({...person,followed:!!person.followed,avatar_url:avatarURL(person.id)})),next:rows.length>20?rows[19].id:null});
+      }
       const userMatch = path.match(/^\/api\/users\/(\d+)(?:\/(follow|followers|following))?$/);
       if (userMatch) {
         const target = Number(userMatch[1]), action = userMatch[2];

@@ -13,6 +13,7 @@ export function navigationSection(route) {
   if(route==='market'||route==='market-write')return 'market';
   if(route==='ranking')return 'ranking';
   if(route==='map')return 'map';
+  if(route==='people')return 'people';
   if(route==='search')return 'search';
   if(route==='write'||route.startsWith('edit/'))return 'write';
   return 'profile';
@@ -61,3 +62,5 @@ export function searchValidation(fields) {
   if(from&&to&&from>to)return '시작일은 종료일보다 늦을 수 없습니다.';
   return '';
 }
+
+export function peoplePath(query='',api=false){const q=query.trim();return (api?'/users':'#people')+(q?'?'+new URLSearchParams({q}):'');}
