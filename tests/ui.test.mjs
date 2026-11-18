@@ -79,3 +79,19 @@ test('owned-post links always request the current account and preserve kind and 
  }
  assert.throws(()=>myPostsPath('','all'));assert.equal(parseRoute(myPostsPath('', 'market')).params.has('q'),false);
 });
+
+test('public share URLs preserve supported search filters while excluding tokens, private paths and tracking',async()=>{
+ const {publicShareURL}=await import('../public/ui.mjs');
+ const origin='https://hit.example.test';
+ assert.equal(publicShareURL(origin+'/?token=secret#post/12?token=hidden'),origin+'/#post/12');
+ assert.equal(publicShareURL('https://user:password@hit.example.test/?email=private#post/0012'),origin+'/#post/12');
+ const fields={q:'채비 & 50%_\\?',fish:'농어',region:'강릉',method:'루어',date_from:'2026-11-18',date_to:'2026-11-19',token:'secret',saved:'1',mine:'1',following:'1',email:'private@example.test'};
+ const search=new URL(publicShareURL(origin+'/?token=root#search?'+new URLSearchParams(fields)));
+ assert.equal(search.search,'');assert.deepEqual(Object.fromEntries(parseRoute(search.hash).params),Object.fromEntries(Object.entries(fields).slice(0,6)));
+ const community=new URL(publicShareURL(origin+'/#community?'+new URLSearchParams({q:fields.q,author:'12',mine:'1',token:'secret'})));
+ assert.deepEqual(Object.fromEntries(parseRoute(community.hash).params),{q:fields.q,author:'12'});
+ const market=new URL(publicShareURL(origin+'/#market?status=sold&q=가방&min_price=0&max_price=15000&region=강릉&author=12&before=999&token=secret'));
+ assert.deepEqual(Object.fromEntries(parseRoute(market.hash).params),{status:'sold',q:'가방',region:'강릉',min_price:'0',max_price:'15000',author:'12'});
+ for(const route of ['saved','my-posts?kind=catch','notifications','mailbox','settings','login','verify?token=secret','reset?token=secret','edit/12','write','post/0','post/9007199254740992'])assert.throws(()=>publicShareURL(origin+'/#'+route));
+ assert.throws(()=>publicShareURL('javascript:alert(1)'));assert.throws(()=>publicShareURL('file:///tmp/#post/1'));
+});

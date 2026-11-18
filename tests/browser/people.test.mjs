@@ -250,3 +250,27 @@ test('comment owner can cancel, recover from a failed edit and save literal text
  assert.equal(await page.getByLabel('제목',{exact:true}).inputValue(),'화면검증 새 조황 작성 중');
  assert.deepEqual(errors,[]);
 });
+
+test('public share buttons copy applied filters, reopen correctly and offer a mobile fallback when clipboard is denied',async t=>{
+ const page=await context(t);await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.__copiedShare=text;}}}));
+ const fields={q:'화면검증 채비',region:'강릉',method:'루어',date_from:'2026-11-18',date_to:'2026-11-18',token:'not-a-real-token',mine:'1'};
+ await page.goto(origin+'/?token=not-a-real-root-token#search?'+new URLSearchParams(fields));await page.locator('#posts .post-title').first().waitFor();
+ assert.equal(await page.evaluate(()=>window.__copiedShare),undefined);
+ await page.getByLabel('제목·본문 검색',{exact:true}).fill('아직 검색하지 않은 입력');await page.getByRole('button',{name:'링크 복사',exact:true}).click();
+ const copied=await page.evaluate(()=>window.__copiedShare),url=new URL(copied),params=new URLSearchParams(url.hash.split('?')[1]);
+ assert.equal(url.search,'');assert.equal(params.get('q'),'화면검증 채비');assert.equal(params.get('token'),null);assert.equal(params.get('mine'),null);assert.equal(params.get('date_to'),'2026-11-18');
+ const receiver=await context(t);await receiver.goto(copied);await receiver.locator('#posts .post-title').first().waitFor();assert.equal(await receiver.getByLabel('제목·본문 검색',{exact:true}).inputValue(),'화면검증 채비');
+ for(const hash of ['#post/'+commentPostId,'#community?'+new URLSearchParams({q:'화면검증',author:String(author)}),'#market?'+new URLSearchParams({status:'selling',q:'화면검증',region:'강릉',min_price:'0',max_price:'15000',author:String(author)})]){
+  await page.goto(origin+'/'+hash);await page.getByRole('button',{name:'링크 복사',exact:true}).waitFor();await page.getByRole('button',{name:'링크 복사',exact:true}).click();
+  const shared=await page.evaluate(()=>window.__copiedShare);assert.equal(shared,origin+'/'+hash);
+ }
+ const fallback=await context(t);await fallback.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw new DOMException('Denied','NotAllowedError');}}}));
+ await fallback.goto(origin+'/#community?'+new URLSearchParams({q:'화면검증 & 50%_ ?'}));await fallback.getByRole('button',{name:'링크 복사',exact:true}).click();
+ const field=fallback.getByLabel('복사할 공유 링크',{exact:true});await field.waitFor();assert.equal(await field.getAttribute('readonly'),'');assert.ok((await field.inputValue()).startsWith(origin+'/#community?'));
+ assert.equal(await fallback.getByText('공유 링크를 복사했습니다.',{exact:true}).isVisible(),false);
+ for(const width of [320,390]){
+  await fallback.setViewportSize({width,height:844});const layout=await fallback.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth}));assert.ok(layout.scroll<=layout.width,JSON.stringify(layout));
+  if(process.env.HIT_UI_SCREENSHOTS){mkdirSync(process.env.HIT_UI_SCREENSHOTS,{recursive:true});await fallback.locator('.share-controls').screenshot({path:join(process.env.HIT_UI_SCREENSHOTS,`share-link-${width}.png`)});}
+ }
+ await fallback.getByRole('button',{name:'닫기',exact:true}).click();await field.waitFor({state:'hidden'});assert.deepEqual(errors,[]);
+});

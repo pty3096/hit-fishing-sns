@@ -73,3 +73,14 @@ export function peoplePath(query='',api=false){const q=query.trim();return (api?
 export function communityPath(query='',author=null,api=false){const params=new URLSearchParams(api?{kind:'community'}:{});if(query.trim())params.set('q',query.trim());if(author)params.set('author',author);return (api?'/posts':'#community')+(params.size?'?'+params:'');}
 
 export function myPostsPath(query='',kind='catch',api=false){if(!['catch','community','market'].includes(kind))throw new Error('게시판을 확인해주세요.');const params=new URLSearchParams(api?{mine:'1',kind}:{kind});if(query.trim())params.set('q',query.trim());return (api?'/posts?':'#my-posts?')+params;}
+
+export function publicShareURL(href){
+ const url=new URL(href);if(!['http:','https:'].includes(url.protocol))throw new Error('공유할 수 없는 주소입니다.');
+ const {route,params}=parseRoute(url.hash),post=route.match(/^post\/(\d+)$/);
+ if(post){const id=Number(post[1]);if(!Number.isSafeInteger(id)||id<1)throw new Error('글 주소를 확인해주세요.');return url.origin+'/#post/'+id;}
+ const allowed={search:['q','fish','region','method','date_from','date_to'],community:['q','author'],market:['status','q','region','min_price','max_price','author']}[route];
+ if(!allowed)throw new Error('이 화면에는 공유 링크가 없습니다.');
+ const query=new URLSearchParams();
+ for(const key of allowed){const value=(params.get(key)||'').trim();if(!value)continue;if(key==='author'&&(!Number.isSafeInteger(Number(value))||Number(value)<1))continue;query.set(key,value);}
+ return url.origin+'/#'+route+(query.size?'?'+query:'');
+}
