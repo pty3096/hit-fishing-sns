@@ -68,3 +68,14 @@ test('post keyword links preserve literal text with catch filters and community 
  assert.equal(parseRoute(communityPath('',12)).params.get('q'),null);
  const api=new URL(communityPath(fields.q,12,true),'https://hit.example.test');assert.equal(api.searchParams.get('kind'),'community');assert.equal(api.searchParams.get('q'),fields.q.trim());
 });
+
+test('owned-post links always request the current account and preserve kind and literal query',async()=>{
+ const {myPostsPath,emptyMessage}=await import('../public/ui.mjs');
+ for(const kind of ['catch','community','market']){
+  const query=' 50%_\\ & 내 글? ',parsed=parseRoute(myPostsPath(query,kind));
+  assert.equal(parsed.route,'my-posts');assert.equal(parsed.params.get('kind'),kind);assert.equal(parsed.params.get('q'),query.trim());
+  const api=new URL(myPostsPath(query,kind,true),'https://hit.example.test');assert.equal(api.searchParams.get('mine'),'1');assert.equal(api.searchParams.has('author'),false);assert.equal(api.searchParams.get('kind'),kind);
+  assert.ok(emptyMessage('manage-'+kind).href);
+ }
+ assert.throws(()=>myPostsPath('','all'));assert.equal(parseRoute(myPostsPath('', 'market')).params.has('q'),false);
+});

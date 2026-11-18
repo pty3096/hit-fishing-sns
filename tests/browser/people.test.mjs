@@ -37,6 +37,7 @@ before(async()=>{
   await write({kind:'community',title:'화면검증 장비 정보',body:'화면검증 채비 본문으로 검색합니다.'},'ui-viewer@example.test');
   const photo=(await sharp({create:{width:20,height:20,channels:3,background:'#157da4'}}).png().toBuffer()).toString('base64');
   await write({title:'화면검증 채비 조황',body:'실제 조황이 아닌 화면 검사 자료입니다.',fish:'농어',region:'강릉',method:'루어',fishing_date:'2026-11-18',photos:[{data:photo}]});
+  await write({kind:'market',title:'화면검증 상품 글',body:'실제 판매 상품이 아닌 화면 검사 자료입니다.',region:'강릉',price:15000,photos:[{data:photo}]});
   browser=await chromium.launch({channel:process.env.HIT_BROWSER_CHANNEL||'chrome',headless:true});
 });
 after(async()=>{
@@ -174,4 +175,39 @@ test('catch keyword search combines fishing filters and dates, restores history 
     if(process.env.HIT_UI_SCREENSHOTS){mkdirSync(process.env.HIT_UI_SCREENSHOTS,{recursive:true});await page.screenshot({path:join(process.env.HIT_UI_SCREENSHOTS,`${route}-${width}.png`),fullPage:true});}
   }
   assert.deepEqual(errors,[]);
+});
+
+test('my posts requires login, isolates ownership, preserves filters and opens existing editing safely',async t=>{
+ const page=await context(t);
+ await page.goto(origin+'/#my-posts?'+new URLSearchParams({kind:'community',q:'화면검증'}));
+ await page.getByRole('heading',{name:'다시 만나 반가워요.',exact:true}).waitFor();
+ await page.getByLabel('이메일',{exact:true}).fill('ui-author@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);
+ await page.getByRole('button',{name:'로그인',exact:true}).click();
+ await page.getByRole('heading',{name:'내 글 관리',exact:true}).waitFor();
+ assert.equal(await page.locator('.managed-post').count(),1);assert.match(await page.locator('.managed-post h2').innerText(),/채비 질문/);
+ await searchAction(page,()=>page.locator('.tabs').getByRole('link',{name:'장터',exact:true}).click());
+ assert.equal(await page.locator('.managed-post').count(),1);assert.match(await page.locator('.managed-post h2').innerText(),/상품 글/);
+ assert.equal(await page.getByLabel('내 글 제목·본문 검색',{exact:true}).inputValue(),'화면검증');
+ await searchAction(page,()=>page.locator('.tabs').getByRole('link',{name:'조황',exact:true}).click());
+ assert.match(await page.locator('.managed-post h2').innerText(),/채비 조황/);
+ if(process.env.HIT_UI_SCREENSHOTS){mkdirSync(process.env.HIT_UI_SCREENSHOTS,{recursive:true});await page.locator('#toast').waitFor({state:'hidden'});await page.screenshot({path:join(process.env.HIT_UI_SCREENSHOTS,'my-posts-desktop.png'),fullPage:true});}
+ for(const width of [320,390]){
+  await page.setViewportSize({width,height:844});
+  const layout=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth}));assert.ok(layout.scroll<=layout.width,JSON.stringify(layout));
+  if(process.env.HIT_UI_SCREENSHOTS){mkdirSync(process.env.HIT_UI_SCREENSHOTS,{recursive:true});await page.screenshot({path:join(process.env.HIT_UI_SCREENSHOTS,`my-posts-${width}.png`),fullPage:true});}
+ }
+ await searchAction(page,()=>page.locator('.tabs').getByRole('link',{name:'커뮤니티',exact:true}).click());
+ await page.getByRole('link',{name:'수정하기',exact:true}).click();
+ await page.getByRole('heading',{name:'커뮤니티 글 수정',exact:true}).waitFor();
+ const updated='화면검증 채비 질문 · 관리 수정 확인';await page.getByLabel('제목',{exact:true}).fill(updated);
+ await page.getByRole('button',{name:'수정 저장',exact:true}).click();await page.getByRole('heading',{name:updated,exact:true}).waitFor();
+ await page.goBack();await page.getByRole('heading',{name:'커뮤니티 글 수정',exact:true}).waitFor();
+ await page.goBack();await page.getByRole('heading',{name:'내 글 관리',exact:true}).waitFor();
+ assert.equal(await page.getByLabel('내 글 제목·본문 검색',{exact:true}).inputValue(),'화면검증');assert.equal(await page.locator('.managed-post h2').innerText(),updated);
+ await page.getByLabel('내 글 제목·본문 검색',{exact:true}).fill('없는내게시글');
+ await searchAction(page,()=>page.getByRole('button',{name:'내 글 찾기',exact:true}).click());
+ await page.getByRole('heading',{name:'조건에 맞는 내 이야기가 없어요.',exact:true}).waitFor();
+ await searchAction(page,()=>page.getByRole('link',{name:'검색어 지우기',exact:true}).click());
+ assert.equal(await page.locator('.managed-post').count(),1);assert.equal(await page.getByLabel('내 글 제목·본문 검색',{exact:true}).inputValue(),'');
+ assert.deepEqual(errors,[]);
 });

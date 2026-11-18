@@ -23,6 +23,9 @@ export function canWrite(user,meta) {
 }
 export function emptyMessage(kind='home') {
   return ({
+    'manage-catch':{title:'조건에 맞는 내 조황이 없어요.',body:'검색어를 바꾸거나 새 조황을 남겨보세요.',href:'#write',label:'조황 남기기 →'},
+    'manage-community':{title:'조건에 맞는 내 이야기가 없어요.',body:'검색어를 바꾸거나 새 이야기를 남겨보세요.',href:'#community-write',label:'커뮤니티 글쓰기 →'},
+    'manage-market':{title:'조건에 맞는 내 상품 글이 없어요.',body:'검색어를 바꾸거나 새 상품 글을 등록해보세요.',href:'#market-write',label:'상품 등록 →'},
     map:{title:'이 지역의 조황이 아직 없어요.',body:'다른 지역을 고르거나 조황을 남겨보세요.',href:'#write',label:'조황 남기기 →'},
     market:{title:'조건에 맞는 상품 글이 없어요.',body:'거래 지역이나 판매 상태를 바꿔보세요.',href:'#market',label:'전체 상품 글 보기 →'},
     'community-search':{title:'조건에 맞는 이야기가 없어요.',body:'검색어를 바꾸거나 검색 조건을 지워보세요.',href:'#community',label:'전체 이야기 보기 →'},
@@ -68,3 +71,5 @@ export function searchValidation(fields) {
 export function peoplePath(query='',api=false){const q=query.trim();return (api?'/users':'#people')+(q?'?'+new URLSearchParams({q}):'');}
 
 export function communityPath(query='',author=null,api=false){const params=new URLSearchParams(api?{kind:'community'}:{});if(query.trim())params.set('q',query.trim());if(author)params.set('author',author);return (api?'/posts':'#community')+(params.size?'?'+params:'');}
+
+export function myPostsPath(query='',kind='catch',api=false){if(!['catch','community','market'].includes(kind))throw new Error('게시판을 확인해주세요.');const params=new URLSearchParams(api?{mine:'1',kind}:{kind});if(query.trim())params.set('q',query.trim());return (api?'/posts?':'#my-posts?')+params;}

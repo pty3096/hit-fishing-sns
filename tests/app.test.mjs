@@ -661,3 +661,26 @@ test('catch and community keywords keep kind, combined filters, saved privacy, v
   const first=await query({kind:'community',q:'페이지 조건'});assert.equal(first.body.posts.length,20);assert.ok(first.body.next);
   const last=await query({kind:'community',q:'페이지 조건',before:String(first.body.next)});assert.equal(last.body.posts.length,3);assert.equal(last.body.next,null);assert.ok(!ids(first).some(id=>ids(last).includes(id)));
 });
+
+test('owned-post management stays scoped per account and kind with search, hidden rows and pagination',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'hit-my-posts-')),database=join(dir,'hit.sqlite'),app=createApp({database});t.after(()=>{app.close();rmSync(dir,{recursive:true,force:true});});
+ const a=await request(app,'POST','/api/signup',credentials('manage-a@example.test')),b=await request(app,'POST','/api/signup',credentials('manage-b@example.test'));
+ const owned={};
+ for(const kind of ['catch','community','market'])for(const account of [a,b]){
+  const data={...post,kind,title:'내 글 검증 '+kind,body:'본인 목록의 검증용 글',price:15000};
+  const created=await request(app,'POST','/api/posts',data,account.cookie);assert.equal(created.status,201);
+  if(account===a)owned[kind]=created.body.post.id;
+ }
+ const query=(kind,cookie,extra={})=>request(app,'GET','/api/posts?'+new URLSearchParams({mine:'1',kind,q:'내 글 검증',...extra}),undefined,cookie);
+ for(const kind of ['catch','community','market']){
+  assert.equal((await query(kind)).status,401);
+  assert.deepEqual((await query(kind,a.cookie)).body.posts.map(p=>p.id),[owned[kind]]);
+  assert.ok((await query(kind,b.cookie)).body.posts.every(p=>p.user_id===b.body.user.id));
+  assert.equal((await query(kind,a.cookie,{author:String(b.body.user.id)})).body.posts.length,0);
+ }
+ const db=new DatabaseSync(database);db.prepare('UPDATE posts SET hidden=1 WHERE id=?').run(owned.community);db.close();
+ assert.equal((await query('community',a.cookie)).body.posts.length,0);
+ for(let i=0;i<21;i++)await request(app,'POST','/api/posts',{kind:'community',title:'관리 페이지 '+i,body:'검증용'},a.cookie);
+ const first=await query('community',a.cookie,{q:'관리 페이지'});assert.equal(first.body.posts.length,20);assert.ok(first.body.next);
+ const last=await query('community',a.cookie,{q:'관리 페이지',before:String(first.body.next)});assert.equal(last.body.posts.length,1);assert.equal(last.body.next,null);assert.ok(!first.body.posts.some(p=>p.id===last.body.posts[0].id));
+});
