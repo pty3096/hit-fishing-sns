@@ -527,3 +527,14 @@ test('market listings validate prices and ownership, keep photos, filter status 
  assert.equal((await request(app,'DELETE','/api/account',{password:credentials('').password,confirm:'탈퇴'},a.cookie)).status,200);
  assert.equal((await request(app,'GET','/api/posts?kind=market')).body.posts.length,0);assert.equal((await request(app,'GET','/api/posts?saved=1',undefined,b.cookie)).body.posts.length,0);
 });
+
+
+test('region map module is served with a narrow external-frame policy and existing protection',async t=>{
+  const app=createApp({database:':memory:'});t.after(app.close);
+  const response=await request(app,'GET','/region-map.mjs');
+  assert.equal(response.status,200);assert.match(response.headers['content-type'],/text\/javascript/);
+  assert.match(response.headers['content-security-policy'],/frame-src https:\/\/www.openstreetmap.org;/);
+  assert.match(response.headers['content-security-policy'],/script-src 'self';/);
+  assert.match(response.headers['content-security-policy'],/frame-ancestors 'none';/);
+  assert.equal((await request(app,'GET','/region-map.mjs/../private')).status,404);
+});

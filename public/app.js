@@ -1,3 +1,4 @@
+import {mapRegions,regionMapView,regionMapPath} from './region-map.mjs';
 import {parseRoute,searchPath,navigationSection,canWrite,emptyMessage,galleryPosition,photoSelectionError,searchValidation} from './ui.mjs';
 import {draftStore,draftFields} from './drafts.mjs';
 let drafts;try{drafts=draftStore(sessionStorage);}catch{drafts=draftStore(null);}
@@ -36,8 +37,8 @@ function formAction(id, action) {
   };
 }
 const icon=name=>`<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
-const upcoming={shorts:'숏폼',map:'포인트지도',booking:'선상예약'};
-function quickLinks(){return `<div class="quick-grid">${[['feed','feed','조황피드'],['coming/shorts','play','숏폼영상'],['coming/map','map','낚시지도'],['coming/booking','calendar','출조예약'],['community','users','커뮤니티'],['ranking','trophy','랭킹']].map(([href,symbol,label])=>`<a href="#${href}" class="quick-tile">${icon(symbol)}<strong>${label}</strong>${href.startsWith('coming')?'<small>준비 중</small>':''}</a>`).join('')}</div>`;}
+const upcoming={shorts:'숏폼',booking:'선상예약'};
+function quickLinks(){return `<div class="quick-grid">${[['feed','feed','조황피드'],['coming/shorts','play','숏폼영상'],['map','map','낚시지도'],['coming/booking','calendar','출조예약'],['community','users','커뮤니티'],['ranking','trophy','랭킹']].map(([href,symbol,label])=>`<a href="#${href}" class="quick-tile">${icon(symbol)}<strong>${label}</strong>${href.startsWith('coming')?'<small>준비 중</small>':''}</a>`).join('')}</div>`;}
 function discovery(posts){
  const authors=[...new Map(posts.map(p=>[p.user_id,p])).values()].slice(0,3);
  document.querySelector('#discovery').innerHTML=`<section class="card"><h2>만나보는 낚시인</h2>${authors.map(p=>`<a class="discovery-person" href="#user/${p.user_id}">${avatar(p)}<span><strong>${esc(p.nickname)}</strong><small>조황 작성자</small></span><b>프로필</b></a>`).join('')||'<p class="muted">첫 조황의 주인공이 되어주세요.</p>'}</section><section class="card"><h2>새로 올라온 조황 <span class="live-dot"></span></h2>${posts.slice(0,3).map(p=>`<a class="latest-item" href="#post/${p.id}">${p.photos?.[0]?`<img src="${esc(p.photos[0].url)}" alt="" loading="lazy">`:icon('feed')}<span><strong>${esc(p.fish)}</strong><small>${esc(p.region)} · ${esc(p.nickname)}</small></span></a>`).join('')||'<p class="muted">아직 등록된 조황이 없어요.</p>'}<p class="field-help">화면을 연 시점의 최근 기록입니다.</p></section>`;
@@ -69,6 +70,7 @@ function showList(target,result,morePath,kind='home',append=false) {
 }
 async function render({focus=false}={}) {
   const current=++generation;const {route,params}=parseRoute(location.hash);
+  if(route==='coming/map'){location.hash=regionMapPath(params.get('region')||'');return;}
   main.setAttribute('aria-busy','true');
   document.querySelector('#discovery').innerHTML='<section class="card"><h2>낚시하는 모든 순간, 히트!</h2><p class="muted">조황을 기록하고 낚시인들과 이야기를 나눠보세요.</p><a class="primary" href="#write">조황 남기기</a></section>';
   editor=null;
@@ -96,6 +98,14 @@ async function render({focus=false}={}) {
         formAction('search',async data=>{const error=searchValidation(data);if(error)throw new Error(error);const path=searchPath(new URLSearchParams(data));const hash='#search'+(path.includes('?')?path.slice(path.indexOf('?')):'');if(location.hash===hash)await render({focus:true});else location.hash=hash;});
         document.querySelector('#reset-search').onclick=()=>{if(location.hash==='#search')render();else location.hash='search';};
       }
+    } else if(route==='map'){
+      const region=(params.get('region')||'').trim().slice(0,50),view=regionMapView(region);
+      const listPath='/posts'+(region?'?'+new URLSearchParams({region}):'');
+      const result=await api(listPath);if(current!==generation)return;
+      main.innerHTML=`<div class="section-head"><div><p class="eyebrow">FISHING REGIONS</p><h1>${icon('map')} 지역별 낚시지도</h1></div><a href="#write" class="primary">조황 남기기</a></div><p class="muted">조황에 적힌 지역으로 찾아보세요. 지도는 지역 주변을 보여주며 실제 낚시 지점이나 조황 위치 핀을 표시하지 않습니다.</p><nav class="region-map-tabs" aria-label="지도 지역 선택">${mapRegions.map(item=>`<a href="${esc(regionMapPath(item.region))}" aria-current="${region===item.region?'page':'false'}">${esc(item.name)}</a>`).join('')}</nav><section class="card map-panel"><div class="section-head"><h2>${esc(view.name)} 주변 지도</h2><span class="tag">지역 참고용</span></div>${!view.matched?'<p class="field-help">입력한 지역의 지도 범위가 준비되지 않아 전국 지도를 표시합니다. 조황 목록은 입력한 지역으로 검색합니다.</p>':''}<div id="map-slot" class="map-slot"><div><p>지도를 열면 OpenStreetMap에 연결됩니다.</p><p class="field-help">휴대폰 GPS와 조황 정보는 보내지 않습니다. 외부 지도 서비스에는 일반 접속 정보가 전달됩니다.</p><button type="button" id="load-map" class="primary">외부 지도 불러오기</button></div></div><p class="field-help map-credit">지도 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap 기여자</a> · <a href="${esc(view.external)}" target="_blank" rel="noopener noreferrer">지도 크게 열기 ↗</a></p><p class="field-help">지도가 비어 있거나 연결되지 않으면 크게 열기를 이용해주세요. 지도 연결 없이도 아래 조황 목록을 이용할 수 있습니다.</p></section><form id="map-search" class="card form"><label for="map-region">조황 지역 검색</label><div class="market-search-row"><input id="map-region" name="region" maxlength="50" value="${esc(region)}" placeholder="예: 강릉, 거제"><button type="submit">찾기</button></div>${formError}</form><h2>${region?esc(region)+' 지역 조황':'전체 지역 조황'}</h2><div id="posts"></div>`;
+      showList('#posts',result,listPath,'map');
+      formAction('map-search',async data=>{const hash=regionMapPath(data.region);if(location.hash===hash)await render({focus:true});else location.hash=hash;});
+      document.querySelector('#load-map').onclick=()=>{const frame=document.createElement('iframe');frame.title=view.name+' 주변 참고 지도 · OpenStreetMap';frame.src=view.embed;frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-popups');frame.setAttribute('allow',"geolocation 'none'");document.querySelector('#map-slot').replaceChildren(frame);};
     } else if(route==='ranking'){
       const period=params.get('period')||'7';
       const result=await api('/rankings?period='+encodeURIComponent(period));if(current!==generation)return;

@@ -65,7 +65,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
   async function handle(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' blob:; frame-src https://www.openstreetmap.org; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Cache-Control', 'no-store');
     if(secure)res.setHeader('Strict-Transport-Security','max-age=31536000');
     const send = (status, data) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(data)); };
@@ -78,7 +78,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       if(path==='/api/meta'&&method==='GET')return send(200,{development_mail:!!mail.localMailbox,verification_required:requireVerified,production});
       if (!path.startsWith('/api/')) {
         if (method !== 'GET') fail(405, '지원하지 않는 요청입니다.');
-        const file = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/ui.mjs': ['ui.mjs','text/javascript'], '/drafts.mjs':['drafts.mjs','text/javascript'], '/assets/approved-ui-v1.1.jpg':['assets/approved-ui-v1.1.jpg','image/jpeg'], '/style.css': ['style.css', 'text/css'] }[path];
+        const file = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/ui.mjs': ['ui.mjs','text/javascript'], '/region-map.mjs':['region-map.mjs','text/javascript'], '/drafts.mjs':['drafts.mjs','text/javascript'], '/assets/approved-ui-v1.1.jpg':['assets/approved-ui-v1.1.jpg','image/jpeg'], '/style.css': ['style.css', 'text/css'] }[path];
         if (!file) fail(404, '페이지가 없습니다.');
         res.setHeader('Content-Type', `${file[1]}; charset=utf-8`);
         res.end(readFileSync(resolve(root, 'public', file[0]))); return;
