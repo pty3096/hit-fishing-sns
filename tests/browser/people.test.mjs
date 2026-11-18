@@ -274,3 +274,39 @@ test('public share buttons copy applied filters, reopen correctly and offer a mo
  }
  await fallback.getByRole('button',{name:'닫기',exact:true}).click();await field.waitFor({state:'hidden'});assert.deepEqual(errors,[]);
 });
+
+test('real signup and verification survive reload and resume the requested first community post',async t=>{
+ const page=await context(t);await page.goto(origin+'/#community-write');await page.getByRole('heading',{name:'다시 만나 반가워요.',exact:true}).waitFor();
+ await page.getByRole('link',{name:'처음이신가요? 회원가입 →',exact:true}).click();
+ await page.getByLabel('닉네임',{exact:true}).fill('가입흐름 화면검증');await page.getByLabel('이메일',{exact:true}).fill('ui-onboarding@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);
+ await page.getByRole('button',{name:'회원가입',exact:true}).click();await page.getByRole('heading',{name:'내 계정 설정',exact:true}).waitFor();
+ await page.reload();await page.getByRole('heading',{name:'내 계정 설정',exact:true}).waitFor();
+ await page.getByRole('link',{name:'개발용 메일함 열기 →',exact:true}).click();
+ await page.locator('article').filter({hasText:'히트 HIT 이메일 인증'}).getByRole('link',{name:'안내 열기 →',exact:true}).click();
+ await page.getByRole('button',{name:'이메일 인증 완료하기',exact:true}).click();await page.getByRole('heading',{name:'커뮤니티 글쓰기',exact:true}).waitFor();assert.ok(!page.url().includes('verify/'));
+ await page.getByLabel('제목',{exact:true}).fill('가입·인증 화면검증 첫 글');await page.getByLabel('이야기',{exact:true}).fill('실제 이용자 글이 아닌 가입 흐름 검증 자료입니다.');
+ if(process.env.HIT_UI_SCREENSHOTS){mkdirSync(process.env.HIT_UI_SCREENSHOTS,{recursive:true});await page.locator('#toast').waitFor({state:'hidden'});await page.screenshot({path:join(process.env.HIT_UI_SCREENSHOTS,'onboarding-first-post.png'),fullPage:true});}
+ await page.getByRole('button',{name:'글 등록',exact:true}).click();await page.getByRole('heading',{name:'가입·인증 화면검증 첫 글',exact:true}).waitFor();
+});
+
+test('password recovery rejects mismatched confirmation, revokes old sessions and resumes the original task after login',async t=>{
+ const observer=await context(t);await observer.goto(origin+'/#login');await observer.getByLabel('이메일',{exact:true}).fill('ui-viewer@example.test');await observer.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);await observer.getByRole('button',{name:'로그인',exact:true}).click();await observer.getByRole('heading',{name:'화면검증 동료',exact:true}).waitFor();
+ const page=await context(t);await page.goto(origin+'/#write');await page.getByRole('heading',{name:'다시 만나 반가워요.',exact:true}).waitFor();
+ await page.getByRole('link',{name:'비밀번호를 잊으셨나요? →',exact:true}).click();await page.getByRole('heading',{name:'비밀번호 찾기',exact:true}).waitFor();await page.getByLabel('이메일',{exact:true}).fill('ui-viewer@example.test');await page.getByRole('button',{name:'재설정 안내 받기',exact:true}).click();await page.getByRole('heading',{name:'메일함을 확인해주세요.',exact:true}).waitFor();
+ await observer.goto(origin+'/#mailbox');const resetLink=observer.locator('article').filter({hasText:'히트 HIT 비밀번호 재설정'}).getByRole('link',{name:'안내 열기 →',exact:true});await resetLink.waitFor();const link=await resetLink.getAttribute('href');
+ await page.goto(link);await page.getByRole('heading',{name:'새 비밀번호 설정',exact:true}).waitFor();await page.reload();await page.getByRole('heading',{name:'새 비밀번호 설정',exact:true}).waitFor();
+ const changed='Only-local-ui-reset-98765';await page.getByLabel('새 비밀번호 (12~128자)',{exact:true}).fill(changed);await page.getByLabel('새 비밀번호 확인',{exact:true}).fill('different-confirmation-value');await page.getByRole('button',{name:'비밀번호 변경',exact:true}).click();await page.getByRole('alert').filter({hasText:'두 비밀번호가 일치하지 않습니다.'}).waitFor();
+ await page.getByLabel('새 비밀번호 확인',{exact:true}).fill(changed);await page.getByRole('button',{name:'비밀번호 변경',exact:true}).click();await page.getByRole('heading',{name:'다시 만나 반가워요.',exact:true}).waitFor();assert.ok(!page.url().includes('reset/'));
+ assert.equal((await (await observer.request.get(origin+'/api/me')).json()).user,null);
+ await page.getByLabel('이메일',{exact:true}).fill('ui-viewer@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);await page.getByRole('button',{name:'로그인',exact:true}).click();await page.getByRole('alert').filter({hasText:'이메일 또는 비밀번호를 확인해주세요.'}).waitFor();
+ await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(changed);await page.getByRole('button',{name:'로그인',exact:true}).click();await page.getByRole('heading',{name:'오늘의 조황 남기기',exact:true}).waitFor();assert.deepEqual(errors,[]);
+});
+
+test('verification response recovery removes the used token and offers the preserved next task',async t=>{
+ const page=await context(t);await page.goto(origin+'/#market-write');await page.getByRole('heading',{name:'다시 만나 반가워요.',exact:true}).waitFor();await page.getByRole('link',{name:'처음이신가요? 회원가입 →',exact:true}).click();
+ await page.getByLabel('닉네임',{exact:true}).fill('인증복구 화면검증');await page.getByLabel('이메일',{exact:true}).fill('ui-verification-recovery@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);await page.getByRole('button',{name:'회원가입',exact:true}).click();await page.getByRole('heading',{name:'내 계정 설정',exact:true}).waitFor();
+ await page.getByRole('link',{name:'개발용 메일함 열기 →',exact:true}).click();await page.locator('article').filter({hasText:'히트 HIT 이메일 인증'}).getByRole('link',{name:'안내 열기 →',exact:true}).click();await page.getByRole('heading',{name:'이메일 인증',exact:true}).waitFor();
+ let failed=false;await page.route('**/api/me',route=>{if(!failed){failed=true;return route.abort('failed');}return route.continue();});
+ await page.getByRole('button',{name:'이메일 인증 완료하기',exact:true}).click();await page.getByRole('heading',{name:'하던 작업을 계속할까요?',exact:true}).waitFor();assert.ok(!page.url().includes('verify/'));
+ await page.getByRole('link',{name:'이어서 진행하기',exact:true}).click();await page.getByRole('heading',{name:'장터 상품 등록',exact:true}).waitFor();assert.deepEqual(errors,[]);
+});

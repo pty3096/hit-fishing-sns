@@ -60,3 +60,7 @@ SMTP를 지원하는 서비스에 다음 설정을 제공하면 같은 기능을
 브라우저에서 개발 계정의 인증 완료와 재설정 안내·새 비밀번호 입력 화면을 확인했습니다. 실제 계정의 비밀번호는 변경하지 않았습니다.
 
 구현 참고: [Nodemailer SMTP](https://nodemailer.com/smtp), [OWASP 비밀번호 재설정 지침](https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html).
+
+## 0.24.0 작업 복귀
+
+같은 탭의 원래 작업을 새로고침 후에도 최대 30분 보존합니다. 인증 후 원래 화면으로 복귀하며 후속 계정 조회 실패 시 사용한 토큰 주소를 제거하고 설정에서 이어갈 수 있습니다. 비밀번호 재설정은 기존 세션을 모두 종료하며 새 비밀번호 로그인 후 유효한 작업으로 복귀합니다. [상세 범위](36_ONBOARDING_RESUME.md)를 참고해주세요.

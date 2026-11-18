@@ -1,3 +1,4 @@
+import {authReturnStore} from './auth-return.mjs';
 import {marketSearchError,marketFilters,marketPath} from './market-search.mjs';
 import {mapRegions,regionMapView,regionMapPath} from './region-map.mjs';
 import {prepareInstallation,installationState,installationStatus,requestInstallation} from './install.mjs';
@@ -8,7 +9,8 @@ let editor=null,activeHash=location.hash;
 addEventListener('beforeunload',event=>{if(editor?.dirty()){editor.save();event.preventDefault();event.returnValue='';}});
 const main = document.querySelector('#main');
 let meta = {development_mail:false,verification_required:true,production:false};
-let me = null, returnTo = 'profile', generation = 0;
+let me = null, generation = 0;
+let authReturn;try{authReturn=authReturnStore(sessionStorage);}catch{authReturn=authReturnStore(null);}
 let previewUrls = [];
 const cleanupPreviews = () => { previewUrls.forEach(url => URL.revokeObjectURL(url)); previewUrls = []; };
 const fileBase64 = file => new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = () => reject(new Error('사진을 읽을 수 없습니다.')); reader.readAsDataURL(file); });
@@ -21,12 +23,13 @@ async function api(path, method = 'GET', data) {
 }
 let toastTimer;
 function toast(message) { clearTimeout(toastTimer);const t = document.querySelector('#toast'); t.textContent = message; t.hidden = false; toastTimer=setTimeout(() => { t.hidden = true; }, 4500); }
-function guard(route) { if (me) return true; returnTo = route; location.hash = 'login'; return false; }
+function guard(route) { if (me) return true; authReturn.write(route); location.hash = 'login'; return false; }
 function guardWrite(route) {
   if(!guard(route))return false;
-  if(!canWrite(me,meta)){toast(me.suspended?'이용이 제한된 계정입니다. 설정을 확인해주세요.':'이메일 인증 후 이용할 수 있어요.');location.hash='settings';return false;}
+  if(!canWrite(me,meta)){if(!me.suspended)authReturn.write(route);toast(me.suspended?'이용이 제한된 계정입니다. 설정을 확인해주세요.':'이메일 인증 후 이용할 수 있어요.');location.hash='settings';return false;}
   return true;
 }
+function replaceAuthRoute(route){history.replaceState(null,'',location.pathname+location.search+'#'+route);activeHash=location.hash;render({focus:true});}
 function formAction(id, action) {
   const form = document.getElementById(id);if(!form)return;
   const formRoute=location.hash;
@@ -176,18 +179,18 @@ async function render({focus=false}={}) {
     } else if (route === 'login' || route === 'signup') {
       const signup = route === 'signup';
       main.innerHTML = `<section class="card"><span class="eyebrow">WELCOME TO HIT</span><h1>${signup ? '첫 기록을 시작해요.' : '다시 만나 반가워요.'}</h1><p class="muted">${meta.development_mail?'개발용 메일함에서 인증·재설정 안내를 확인할 수 있습니다.':'가입한 이메일로 인증·재설정 안내를 보내드립니다.'}</p><form id="auth" class="form">${signup ? '<label for="nickname">닉네임</label><input id="nickname" name="nickname" maxlength="30" autocomplete="nickname" required>' : ''}<label for="email">이메일</label><input id="email" name="email" type="email" maxlength="254" autocomplete="username" required><label for="password">비밀번호 (12~128자)</label><input id="password" name="password" type="password" minlength="12" maxlength="128" autocomplete="${signup ? 'new-password' : 'current-password'}" required>${formError}<button class="primary" type="submit">${signup ? '회원가입' : '로그인'}</button></form><p><a href="#${signup ? 'login' : 'signup'}">${signup ? '이미 계정이 있어요 →' : '처음이신가요? 회원가입 →'}</a></p>${!signup?'<p><a href="#forgot">비밀번호를 잊으셨나요? →</a></p>':''}</section>`;
-      formAction('auth',async(data,stillHere)=>{ me = (await api(signup ? '/signup' : '/login', 'POST', data)).user; if(stillHere())location.hash=me.suspended||!me.email_verified?'settings':returnTo;else render(); toast(signup ? '가입했습니다. 첫 조황을 남겨보세요.' : '로그인했습니다.'); });
+      formAction('auth',async(data,stillHere)=>{ me = (await api(signup ? '/signup' : '/login', 'POST', data)).user; if(stillHere())location.hash=canWrite(me,meta)?authReturn.take():'settings';else render(); toast(signup ? (canWrite(me,meta)?'가입했습니다. 첫 글을 남겨보세요.':'가입했습니다. 이메일 인증 안내를 확인해주세요.') : '로그인했습니다.'); });
     } else if (route === 'forgot') {
       main.innerHTML=`<a href="#login" class="back">← 로그인</a><h1>비밀번호 찾기</h1><form id="forgot-form" class="card form"><p>가입한 이메일을 입력해주세요.</p><label for="email">이메일</label><input id="email" name="email" type="email" maxlength="254" autocomplete="email" required>${formError}<button type="submit" class="primary">재설정 안내 받기</button></form>`;
       formAction('forgot-form',async(data,stillHere)=>{const result=await api('/password/forgot','POST',data);if(!stillHere()){toast('재설정 요청을 접수했습니다.');return;}main.innerHTML=`<section class="card"><h1>메일함을 확인해주세요.</h1><p>${esc(result.message)}</p>${meta.development_mail?`<p class="muted">로컬 검증에서는 로그인한 계정의 <a href="#mailbox">개발용 메일함</a> 또는 이 PC의 메일함 확인 명령을 사용합니다.</p>`:''}<a href="#login">로그인으로 →</a></section>`;});
     } else if (/^verify\/[a-f0-9]{64}$/.test(route)) {
       const token=route.split('/')[1];
       main.innerHTML=`<h1>이메일 인증</h1><form id="verify-form" class="card form"><p>아래 버튼을 누르면 이메일 인증이 완료됩니다.</p>${formError}<button type="submit" class="primary">이메일 인증 완료하기</button></form>`;
-      formAction('verify-form',async(_,stillHere)=>{await api('/email/verify','POST',{token});if(!stillHere()){toast('이메일 인증을 완료했습니다.');return;}history.replaceState(null,'',me?'#settings':'#login');toast('이메일 인증을 완료했습니다.');render();});
+      formAction('verify-form',async(_,stillHere)=>{await api('/email/verify','POST',{token});if(!stillHere()){toast('이메일 인증을 완료했습니다.');return;}let session;try{session=await api('/me');}catch{if(stillHere())replaceAuthRoute(me?'settings':'login');toast('이메일 인증은 완료했습니다. 연결을 확인한 뒤 이어서 진행해주세요.');return;}if(!stillHere()){toast('이메일 인증을 완료했습니다.');return;}me=session.user;const destination=!me?'login':canWrite(me,meta)?authReturn.take():'settings';replaceAuthRoute(destination);toast('이메일 인증을 완료했습니다.');});
     } else if (/^reset\/[a-f0-9]{64}$/.test(route)) {
       const token=route.split('/')[1];
       main.innerHTML=`<h1>새 비밀번호 설정</h1><form id="reset-form" class="card form"><p>변경하면 모든 기기의 기존 로그인이 종료됩니다.</p><label for="password">새 비밀번호 (12~128자)</label><input id="password" name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><label for="password-confirm">새 비밀번호 확인</label><input id="password-confirm" name="confirm" type="password" minlength="12" maxlength="128" autocomplete="new-password" required>${formError}<button type="submit" class="primary">비밀번호 변경</button></form>`;
-      formAction('reset-form',async data=>{if(data.password!==data.confirm)throw new Error('두 비밀번호가 일치하지 않습니다.');await api('/password/reset','POST',{token,password:data.password});me=null;history.replaceState(null,'','#login');toast('비밀번호를 변경했습니다. 다시 로그인해주세요.');render();});
+      formAction('reset-form',async data=>{if(data.password!==data.confirm)throw new Error('두 비밀번호가 일치하지 않습니다.');await api('/password/reset','POST',{token,password:data.password});me=null;replaceAuthRoute('login');toast('비밀번호를 변경했습니다. 다시 로그인해주세요.');});
     } else if (route === 'mailbox') {
       if(!guard(route))return;
       if(!meta.development_mail)throw new Error('개발용 메일함은 로컬 검증에서만 사용할 수 있습니다.');
@@ -296,7 +299,7 @@ async function render({focus=false}={}) {
       main.className="profile-page";
       main.innerHTML = `<section class="card profile-card"><div class="profile">${avatar(person)}<div><span class="eyebrow">히트 크루 · 나의 낚시 기록</span><h1>${esc(person.nickname)}</h1><p class="content">${esc(person.bio || '나만의 낚시 이야기를 남겨보세요.')}</p></div></div><div class="stats"><div><strong>${result.posts.length}${result.next?'+':''}</strong>조황</div><a href="#user/${userId}/followers"><strong>${person.followers}</strong>팔로워</a><a href="#user/${userId}/following"><strong>${person.following}</strong>팔로잉</a></div>${mine ? '<div class="profile-owner-actions"><a href="#profile-edit">프로필 편집 →</a><a href="#my-posts">내 글 관리 →</a><a href="#settings">설정</a><button id="logout">로그아웃</button></div>' : `<button id="follow" aria-pressed="${person.followed}">${person.followed ? '팔로잉 취소' : '＋ 팔로우'}</button><div class="actions"><a href="#report/user/${userId}">사용자 신고</a><button id="block">사용자 차단</button></div><div id="block-confirm" hidden><p>서로의 글·댓글이 숨겨지고 팔로우 관계가 해제됩니다.</p><button id="block-yes">차단하기</button><button id="block-no">취소</button></div>`}</section><div class="profile-tabs"><span aria-current="page">${icon('feed')} 조황</span><a href="#community?author=${userId}">${icon('users')} 커뮤니티</a><a href="#market?author=${userId}">${icon('shop')} 장터</a>${mine?`<a href="#saved">${icon('bookmark')} 저장</a>`:''}</div><h2 class="sr-only">${mine ? '내 글 기록' : '조황 기록'}</h2><div id="posts" class="profile-posts"></div>`;
       showList('#posts',result,'/posts?author='+userId,mine?'mine':'author');
-      if (mine) document.querySelector('#logout').onclick = async () => { try { await api('/logout', 'POST', {}); drafts.clear(me.id);me = null; location.hash = 'home'; toast('로그아웃했습니다.'); } catch (e) { toast(e.message); } };
+      if (mine) document.querySelector('#logout').onclick = async () => { try { await api('/logout', 'POST', {}); drafts.clear(me.id);authReturn.clear();me = null; location.hash = 'home'; toast('로그아웃했습니다.'); } catch (e) { toast(e.message); } };
       else document.querySelector('#follow').onclick = async event => { if (!guardWrite(route)) return; event.target.disabled=true; try { await api('/users/'+userId+'/follow', person.followed ? 'DELETE' : 'PUT', {}); render(); } catch (e) { toast(e.message); event.target.disabled=false; } };
       if (!mine) {
         document.querySelector('#block').onclick=()=>{if(guardWrite(route))document.querySelector('#block-confirm').hidden=false;};
@@ -320,10 +323,17 @@ async function render({focus=false}={}) {
     } else if (route === 'settings') {
       if(!guard(route))return;
       main.innerHTML=`<h1>내 계정 설정</h1><p><a href="#my-posts">내 글 관리 →</a></p><p><a href="#install">홈 화면에 추가 안내 →</a></p><section class="card"><h2>이메일 인증</h2><p>${me.email_verified?'인증을 완료했습니다.':'이메일 인증이 필요합니다.'}</p>${!me.email_verified?'<button id="resend-email">인증 안내 다시 받기</button>':''}${meta.development_mail?'<p><a href="#mailbox">개발용 메일함 열기 →</a></p>':''}<p><a href="#forgot">비밀번호 재설정 안내 받기 →</a></p></section><section class="card">${me.suspended?'<p class="error">이용이 제한된 계정입니다. 글 작성과 소통 기능을 사용할 수 없습니다. 탈퇴는 가능합니다.</p>':''}<p><a href="#profile">내 프로필 →</a></p>${me.is_admin?'<p><a href="#admin">운영자 신고 관리 →</a></p>':''}<h2>차단한 사용자</h2><div id="blocked-users"></div></section><section class="card"><h2>회원 탈퇴</h2><p>계정, 조황·사진, 댓글, 좋아요, 팔로우·차단 관계와 모든 로그인 세션을 삭제합니다. 접수된 신고·운영 기록은 일부 익명화하여 남습니다.</p><p>이 작업은 되돌릴 수 없습니다. 개발 백업 파일은 별도로 관리됩니다.</p><form id="withdraw" class="form"><label for="withdraw-password">현재 비밀번호</label><input id="withdraw-password" type="password" name="password" autocomplete="current-password" required maxlength="128"><label for="withdraw-confirm">확인을 위해 탈퇴를 입력해주세요</label><input id="withdraw-confirm" name="confirm" required autocomplete="off" pattern="탈퇴">${formError}<button type="submit" class="danger-button">계정과 작성 자료 삭제</button></form></section>`;
+      const pending=authReturn.read();
+      if(pending!=='profile'&&pending!=='settings'){
+        const next=document.createElement('section');next.className='card';
+        if(canWrite(me,meta)){const title=document.createElement('h2'),hint=document.createElement('p'),link=document.createElement('a');title.textContent='하던 작업을 계속할까요?';hint.textContent='로그인 전에 열려던 화면으로 돌아갑니다.';link.className='primary back';link.href='#'+pending;link.textContent='이어서 진행하기';link.onclick=()=>authReturn.clear();next.append(title,hint,link);}
+        else if(!me.suspended){const hint=document.createElement('p');hint.textContent='이메일 인증을 완료하면 이 탭에서 하던 작업으로 이어서 돌아갑니다.';next.append(hint);}
+        if(next.childNodes.length)main.querySelector('h1').after(next);
+      }
       const resend=document.querySelector('#resend-email');if(resend)resend.onclick=async()=>{resend.disabled=true;try{const r=await api('/email/resend','POST',{});toast(r.message);}catch(e){toast(e.message);}finally{resend.disabled=false;}};
       await loadBlocked();
       if(current!==generation)return;
-      formAction('withdraw',async data=>{await api('/account','DELETE',data);drafts.clear(me.id);me=null;returnTo='profile';location.hash='home';toast('계정과 작성 자료를 삭제했습니다.');});
+      formAction('withdraw',async data=>{await api('/account','DELETE',data);drafts.clear(me.id);me=null;authReturn.clear();location.hash='home';toast('계정과 작성 자료를 삭제했습니다.');});
     } else if (route === 'admin') {
       if(!guard(route))return;
       if(!me.is_admin)throw new Error('운영자 권한이 필요합니다.');
@@ -449,7 +459,7 @@ function updateGallery(track){
   gallery.querySelectorAll('[data-gallery]').forEach(button=>button.disabled=Number(button.dataset.gallery)<0?index===0:index>=count-1);
 }
 function moveGallery(track,direction){track.scrollBy({left:track.clientWidth*direction,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});}
-main.addEventListener('click',event=>{const button=event.target.closest('[data-gallery]');if(button)moveGallery(button.closest('.gallery').querySelector('.gallery-track'),Number(button.dataset.gallery));const link=event.target.closest('[data-login-return]');if(link)returnTo=link.dataset.loginReturn;});
+main.addEventListener('click',event=>{const button=event.target.closest('[data-gallery]');if(button)moveGallery(button.closest('.gallery').querySelector('.gallery-track'),Number(button.dataset.gallery));const link=event.target.closest('[data-login-return]');if(link)authReturn.write(link.dataset.loginReturn);});
 main.addEventListener('scroll',event=>{if(event.target.classList?.contains('gallery-track'))updateGallery(event.target);},true);
 main.addEventListener('keydown',event=>{if(event.target.classList?.contains('gallery-track')&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();moveGallery(event.target,event.key==='ArrowLeft'?-1:1);}});
 document.querySelector('#skip-link').onclick=event=>{event.preventDefault();main.focus();};
