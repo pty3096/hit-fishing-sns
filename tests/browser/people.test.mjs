@@ -349,3 +349,18 @@ test('avatar selection cancels safely, rejects a replacement without saving an o
  for(const width of [320,390]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
  assert.deepEqual(errors,[]);
 });
+
+test('post submission freezes its snapshot, preserves drafts during navigation and restores editing after failure',async t=>{
+ const page=await context(t,{width:390,height:844});await page.goto(origin+'/#login');await page.getByLabel('이메일',{exact:true}).fill('ui-author@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);await page.getByRole('button',{name:'로그인',exact:true}).click();await page.getByRole('heading',{name:'화면검증 낚시인',exact:true}).waitFor();
+ await page.goto(origin+'/#community-write');await page.getByRole('heading',{name:'커뮤니티 글쓰기',exact:true}).waitFor();await page.getByLabel('제목',{exact:true}).fill('전송잠금 화면검증 글');await page.getByLabel('이야기',{exact:true}).fill('실제 이용자 게시물이 아닌 전송 복구 검증 자료입니다.');
+ const png=await sharp({create:{width:24,height:24,channels:3,background:'#123453'}}).png().toBuffer();await page.locator('#photos').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:png});await page.getByRole('button',{name:'사진 1 삭제',exact:true}).waitFor();
+ let release,entered;const held=new Promise(resolve=>release=resolve),started=new Promise(resolve=>entered=resolve),payloads=[];
+ await page.route('**/api/posts',async route=>{if(route.request().method()!=='POST')return route.continue();payloads.push(route.request().postDataJSON());if(payloads.length===1){entered();await held;return route.abort('failed');}return route.continue();});
+ await page.getByRole('button',{name:'글 등록',exact:true}).click();await started;
+ for(const control of await page.locator('#post-form input,#post-form textarea,#post-form button').all())assert.equal(await control.isDisabled(),true);
+ page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('link',{name:'← 커뮤니티로',exact:true}).click();await page.waitForFunction(()=>location.hash==='#community-write');
+ assert.equal(await page.getByLabel('제목',{exact:true}).inputValue(),'전송잠금 화면검증 글');
+ const drafts=await page.evaluate(()=>Object.entries(sessionStorage).filter(([key])=>key.startsWith('hit-draft')).map(([,value])=>value).join(''));assert.ok(drafts.includes('전송잠금 화면검증 글'));
+ release();await page.locator('#post-form [role=alert]:not([hidden])').waitFor();assert.equal(await page.getByRole('button',{name:'사진 1 삭제',exact:true}).isEnabled(),true);assert.equal(await page.getByLabel('제목',{exact:true}).isEnabled(),true);assert.equal(await page.locator('#photo-preview img').count(),1);
+ await page.getByRole('button',{name:'글 등록',exact:true}).click();await page.getByRole('heading',{name:'전송잠금 화면검증 글',exact:true}).waitFor();assert.equal(payloads.length,2);assert.deepEqual(payloads[0],payloads[1]);assert.equal(await page.locator('.gallery img').count(),1);assert.deepEqual(errors,[]);
+});

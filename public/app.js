@@ -212,7 +212,8 @@ async function render({focus=false}={}) {
       let selectedPhotos = (p.photos || []).map(photo => ({ id:photo.id, url:photo.url }));
       const originalCount = selectedPhotos.length;
       const owner=me.id,key=id||(market?'new-market':community?'new-community':'new'),form=document.querySelector('#post-form'),status=document.querySelector('#draft-status');
-      const values=()=>draftFields(Object.fromEntries(new FormData(form)));
+      let submittingValues=null;
+      const values=()=>submittingValues||draftFields(Object.fromEntries(new FormData(form)));
       let baseline=JSON.stringify(values()),photoBaseline=JSON.stringify(selectedPhotos.map(photo=>photo.id));
       const saved=drafts.read(owner,key);
       let pending=saved;
@@ -255,6 +256,10 @@ async function render({focus=false}={}) {
       };
       let lastFingerprint=null,lastRequestId=null;
       formAction('post-form',async(data,stillHere)=>{
+        const controls=[...form.querySelectorAll('input,textarea,select,button'),...document.querySelectorAll('#draft-offer button')],states=controls.map(control=>control.disabled),activeEditor=editor;
+        submittingValues=draftFields(data);controls.forEach(control=>control.disabled=true);
+        activeEditor.leaveMessage='글을 전송하는 중입니다. 이동하면 결과를 확인하지 못할 수 있습니다. 이동할까요?';
+        try{
         if (!community && !selectedPhotos.length && (!id || originalCount)) throw new Error('사진을 한 장 이상 남겨주세요.');
         if (selectedPhotos.length) {
           const submit = document.querySelector('#post-form button[type=submit]'); submit.textContent = '사진을 저장하는 중…';
@@ -268,7 +273,9 @@ async function render({focus=false}={}) {
           if(fingerprint!==lastFingerprint){lastFingerprint=fingerprint;lastRequestId=crypto.randomUUID().replaceAll('-','');}
           data.request_id=lastRequestId;
         }
-        const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); if(stillHere()||JSON.stringify(drafts.read(owner,key))===JSON.stringify(draftFields(data)))drafts.remove(owner,key);if(stillHere()){editor=null;location.hash='post/'+post.id;}toast(market?'상품 글을 저장했습니다.':community?'글을 저장했습니다.':'조황을 저장했습니다.'); });
+        const { post } = await api(id ? '/posts/' + id : '/posts', id ? 'PATCH' : 'POST', data); if(stillHere()||JSON.stringify(drafts.read(owner,key))===JSON.stringify(draftFields(data)))drafts.remove(owner,key);if(stillHere()){editor=null;location.hash='post/'+post.id;}toast(market?'상품 글을 저장했습니다.':community?'글을 저장했습니다.':'조황을 저장했습니다.');
+        }finally{submittingValues=null;controls.forEach((control,index)=>control.disabled=states[index]);delete activeEditor.leaveMessage;}
+      });
     } else if (/^post\/\d+$/.test(route)) {
       const { post: p } = await api('/posts/' + route.split('/')[1]); if (current !== generation) return;
       main.innerHTML = `<a class="back" href="${p.kind==='market'?'#market':p.kind==='community'?'#community':'#home'}">← ${p.kind==='market'?'장터로':p.kind==='community'?'커뮤니티로':'피드로'}</a>${shareControls(true)}<article class="card"><div class="eyebrow">${p.kind==='market'?'HIT MARKET':p.kind==='community'?'HIT COMMUNITY':'FISHING JOURNAL'}</div><h1>${esc(p.title)}</h1><p class="muted"><a href="#user/${p.user_id}">${esc(p.nickname)}</a> · ${esc(p.kind!=='catch'?new Date(p.created_at).toLocaleDateString('ko-KR'):p.fishing_date)}</p>${photoGallery(p)}${marketInfo(p)}<p>${p.kind!=='catch'?`<span class="tag">${p.kind==='market'?'장터':'커뮤니티'}</span>`:`<span class="tag">${esc(p.region)}</span><span class="tag">${esc(p.fish)}</span><span class="tag">${esc(p.method)}</span>`}</p><p class="content">${esc(p.body)}</p>${me?.id === p.user_id ? `<div class="actions"><a href="#edit/${p.id}">수정</a><button id="delete-post">삭제</button></div><div id="confirm-delete" hidden><p>이 글을 삭제할까요? 삭제 후 복구할 수 없습니다.</p><button id="delete-yes">삭제하기</button><button id="delete-no">취소</button><p class="error" role="alert" hidden></p></div>` : ''}</article><section class="card"><div class="actions">${likeButton(p)}${saveButton(p)}<a href="#user/${p.user_id}">작성자 프로필 →</a>${me?.id!==p.user_id ? `<a href="#report/post/${p.id}">게시물 신고</a>` : ''}</div></section><section class="card"><h2>이야기를 나눠요</h2>${canWrite(me,meta)?`<form id="comment-form" class="form"><p class="field-help">전송에 실패하면 이 화면에서 다시 시도해주세요. 화면을 다시 열었다면 댓글 목록에서 등록 여부를 먼저 확인해주세요.</p><label for="comment">댓글</label><textarea id="comment" name="body" maxlength="300" required placeholder="따뜻한 한마디를 남겨주세요"></textarea>${formError}<button class="primary" type="submit">댓글 등록</button></form>`:`<p class="muted">${!me?'로그인하고 이야기를 나눠보세요.':me.suspended?'이용 제한 상태에서는 댓글을 남길 수 없습니다.':'이메일 인증 후 댓글을 남길 수 있어요.'}</p><a class="primary" href="${me?'#settings':'#login'}" data-login-return="${esc(route)}">${me?'계정 설정 확인':'로그인하기 →'}</a>`}<div id="comments"></div></section>`;
