@@ -268,6 +268,7 @@ async function render({focus=false}={}) {
       if (current !== generation) return;
       let lastCommentText=null,commentRequestId=null;
       formAction('comment-form',async(data,stillHere)=>{
+        if(editor?.comment)throw new Error('수정 중인 댓글을 먼저 저장하거나 취소해주세요.');
         if(!guardWrite(route))return;
         const content=data.body.trim(),field=document.querySelector('#comment');
         if(content!==lastCommentText){lastCommentText=content;commentRequestId=crypto.randomUUID().replaceAll('-','');}
@@ -363,7 +364,7 @@ async function loadComments(postId, before, target = '#comments') {
   const routeAtStart=location.hash;
   const result = await api('/posts/'+postId+'/comments'+(before ? '?before='+before : ''));
   const container = document.querySelector(target); if (!container || routeAtStart!==location.hash) return;
-  container.innerHTML = result.comments.map(c => `<article class="comment"><div class="author">${avatar(c)}<a href="#user/${c.user_id}"><strong>${esc(c.nickname)}</strong></a></div><p class="content">${esc(c.body)}</p>${me?.id!==c.user_id ? `<a href="#report/comment/${c.id}">댓글 신고</a>` : ''}${me?.id===c.user_id ? `<button data-delete-comment="${c.id}" data-post="${postId}">내 댓글 삭제</button>` : ''}</article>`).join('') || (before ? '' : '<p class="muted">첫 댓글을 남겨보세요.</p>');
+  container.innerHTML = result.comments.map(c => `<article class="comment" data-comment-id="${c.id}"><div class="author">${avatar(c)}<a href="#user/${c.user_id}"><strong>${esc(c.nickname)}</strong></a></div><p class="content" data-comment-body>${esc(c.body)}</p>${me?.id!==c.user_id ? `<a href="#report/comment/${c.id}">댓글 신고</a>` : ''}${me?.id===c.user_id ? `<div class="comment-actions"><button data-edit-comment="${c.id}" type="button">댓글 수정</button><button data-delete-comment="${c.id}" data-post="${postId}" type="button">내 댓글 삭제</button></div>` : ''}</article>`).join('') || (before ? '' : '<p class="muted">첫 댓글을 남겨보세요.</p>');
   if (result.next) {
     const more = document.createElement('button'); more.textContent='이전 댓글 더 보기'; container.append(more);
     more.onclick = async () => { more.disabled=true; try { const next = document.createElement('div'); next.id='comments-page-'+result.next; more.before(next);try{await loadComments(postId,result.next,'#'+next.id);more.remove();}catch(e){next.remove();throw e;} } catch(e){toast(e.message);more.disabled=false;} };
@@ -395,6 +396,7 @@ main.addEventListener('click',async event=>{
 main.addEventListener('click',async event => {
   const button = event.target.closest('[data-like],[data-delete-comment],[data-save]'); if (!button) return;
   if (!guardWrite(location.hash.slice(1)||'home')) return;
+  if(button.dataset.deleteComment&&editor?.comment){toast('수정 중인 댓글을 먼저 저장하거나 취소해주세요.');return;}
   const viewGeneration=generation;
   button.disabled=true;
   try {
@@ -409,6 +411,26 @@ main.addEventListener('click',async event => {
       button.dataset.liked=String(result.liked); button.setAttribute('aria-pressed',result.liked); button.classList.toggle('liked',result.liked); button.textContent=(result.liked ? '♥' : '♡')+' 좋아요 '+result.likes;
     } else { await api('/comments/'+button.dataset.deleteComment,'DELETE',{}); await loadComments(button.dataset.post); toast('댓글을 삭제했습니다.'); }
   } catch(e) {toast(e.message);} finally {button.disabled=false;}
+});
+main.addEventListener('click',event=>{
+  const button=event.target.closest('[data-edit-comment]');if(!button)return;
+  if(!guardWrite(location.hash.slice(1)||'home'))return;
+  if(editor?.comment){toast('수정 중인 댓글을 먼저 저장하거나 취소해주세요.');return;}
+  if(document.querySelector('#comment-form')?.getAttribute('aria-busy')==='true'||document.querySelector('[data-delete-comment]:disabled')){toast('진행 중인 댓글 처리가 끝난 뒤 수정해주세요.');return;}
+  const article=button.closest('[data-comment-id]'),bodyNode=article.querySelector('[data-comment-body]'),original=bodyNode.textContent,current=generation;
+  const form=document.createElement('form');form.className='form comment-edit-form';form.innerHTML=`<label for="edit-comment-${button.dataset.editComment}">댓글 수정 내용</label><textarea id="edit-comment-${button.dataset.editComment}" name="body" maxlength="300" required aria-describedby="edit-comment-help-${button.dataset.editComment}"></textarea><p class="field-help" id="edit-comment-help-${button.dataset.editComment}">300자 이내 · 수정 내용은 임시 저장되지 않습니다.</p>${formError}<button type="submit" class="primary">댓글 수정 저장</button><button type="button" data-cancel-edit>취소</button>`;
+  const field=form.querySelector('textarea'),error=form.querySelector('[role=alert]'),controls=article.querySelectorAll('.comment-actions button');let pending=false;
+  field.value=original;bodyNode.hidden=true;controls.forEach(item=>item.disabled=true);article.querySelector('.comment-actions').before(form);field.focus();
+  const session={comment:true,save:()=>false,dirty:()=>pending||field.value!==original,get leaveMessage(){return pending?'댓글을 저장 중입니다. 이동해도 수정이 반영될 수 있습니다. 이동할까요?':'댓글 수정이 끝나지 않았습니다. 임시 저장 없이 이동할까요?';}};editor=session;
+  const close=value=>{if(editor===session)editor=null;if(!article.isConnected||current!==generation)return;const blockedError=document.querySelector('#comment-form [role=alert]');if(blockedError?.textContent==='수정 중인 댓글을 먼저 저장하거나 취소해주세요.'){blockedError.hidden=true;blockedError.textContent='';}if(value!==undefined)bodyNode.textContent=value;bodyNode.hidden=false;form.remove();controls.forEach(item=>item.disabled=false);button.focus();};
+  form.querySelector('[data-cancel-edit]').onclick=()=>close();
+  form.onsubmit=async event=>{
+    event.preventDefault();if(pending)return;
+    error.hidden=true;error.textContent='';pending=true;field.readOnly=true;form.setAttribute('aria-busy','true');form.querySelectorAll('button').forEach(item=>item.disabled=true);
+    try{const result=await api('/comments/'+button.dataset.editComment,'PATCH',{body:field.value});close(result.body);if(current===generation)toast('댓글을 수정했습니다.');}
+    catch(err){if(form.isConnected&&current===generation){error.textContent=err.message;error.hidden=false;error.tabIndex=-1;error.focus();}}
+    finally{pending=false;field.readOnly=false;form.removeAttribute('aria-busy');form.querySelectorAll('button').forEach(item=>item.disabled=false);}
+  };
 });
 function updateNotificationBadge(unread){const badge=document.querySelector('#notification-count');badge.hidden=!unread;badge.textContent=unread>99?'99+':String(unread);document.querySelector('#notifications-link').setAttribute('aria-label',unread?`알림, 읽지 않은 알림 ${unread}개`:'알림');}
 function showNotifications(result,append=false){
@@ -434,7 +456,7 @@ addEventListener('hashchange',()=>{
   if(location.hash===activeHash)return;
   if(editor?.dirty()){
     const saved=editor.save();
-    if(!confirm(saved?'작성 중인 글은 이 탭에 임시 저장됩니다. 사진 변경은 저장되지 않습니다. 이동할까요?':'임시 저장하지 못했습니다. 이동하면 작성 내용을 잃을 수 있습니다. 이동할까요?')){
+    if(!confirm(editor.leaveMessage||(saved?'작성 중인 글은 이 탭에 임시 저장됩니다. 사진 변경은 저장되지 않습니다. 이동할까요?':'임시 저장하지 못했습니다. 이동하면 작성 내용을 잃을 수 있습니다. 이동할까요?'))){
       history.replaceState(null,'',location.pathname+location.search+activeHash);return;
     }
   }

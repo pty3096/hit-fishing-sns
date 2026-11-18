@@ -11,7 +11,7 @@ import {createApp} from '../../server/app.mjs';
 
 // Isolated fixtures only: never connect these tests to the developer or phone-preview database.
 const password='Only-local-ui-check-87651';
-let folder,app,server,browser,origin,author;
+let folder,app,server,browser,origin,author,commentPostId,commentId;
 const errors=[],fixtureCookies={};
 before(async()=>{
   folder=mkdtempSync(join(tmpdir(),'hit-browser-fixture-'));
@@ -31,13 +31,14 @@ before(async()=>{
   db.prepare('UPDATE users SET bio=? WHERE id=?').run('<b>실제 사용자가 아닌 화면 검증용 소개</b>',author);
   db.close();
   const write=async(body,email='ui-author@example.test')=>{
-    const response=await fetch(origin+'/api/posts',{method:'POST',headers:{origin,'Content-Type':'application/json',cookie:fixtureCookies[email]},body:JSON.stringify(body)});assert.equal(response.status,201);
+    const response=await fetch(origin+'/api/posts',{method:'POST',headers:{origin,'Content-Type':'application/json',cookie:fixtureCookies[email]},body:JSON.stringify(body)});assert.equal(response.status,201);return (await response.json()).post;
   };
   await write({kind:'community',title:'화면검증 채비 질문',body:'실제 사용자 질문이 아닌 화면 검사 자료입니다.'});
   await write({kind:'community',title:'화면검증 장비 정보',body:'화면검증 채비 본문으로 검색합니다.'},'ui-viewer@example.test');
   const photo=(await sharp({create:{width:20,height:20,channels:3,background:'#157da4'}}).png().toBuffer()).toString('base64');
-  await write({title:'화면검증 채비 조황',body:'실제 조황이 아닌 화면 검사 자료입니다.',fish:'농어',region:'강릉',method:'루어',fishing_date:'2026-11-18',photos:[{data:photo}]});
+  commentPostId=(await write({title:'화면검증 채비 조황',body:'실제 조황이 아닌 화면 검사 자료입니다.',fish:'농어',region:'강릉',method:'루어',fishing_date:'2026-11-18',photos:[{data:photo}]})).id;
   await write({kind:'market',title:'화면검증 상품 글',body:'실제 판매 상품이 아닌 화면 검사 자료입니다.',region:'강릉',price:15000,photos:[{data:photo}]});
+  const commentResponse=await fetch(origin+'/api/posts/'+commentPostId+'/comments',{method:'POST',headers:{origin,'Content-Type':'application/json',cookie:fixtureCookies['ui-viewer@example.test']},body:JSON.stringify({body:'화면검증 댓글 원문'})});assert.equal(commentResponse.status,201);commentId=(await commentResponse.json()).id;
   browser=await chromium.launch({channel:process.env.HIT_BROWSER_CHANNEL||'chrome',headless:true});
 });
 after(async()=>{
@@ -209,5 +210,43 @@ test('my posts requires login, isolates ownership, preserves filters and opens e
  await page.getByRole('heading',{name:'조건에 맞는 내 이야기가 없어요.',exact:true}).waitFor();
  await searchAction(page,()=>page.getByRole('link',{name:'검색어 지우기',exact:true}).click());
  assert.equal(await page.locator('.managed-post').count(),1);assert.equal(await page.getByLabel('내 글 제목·본문 검색',{exact:true}).inputValue(),'');
+ assert.deepEqual(errors,[]);
+});
+
+test('comment owner can cancel, recover from a failed edit and save literal text without losing a new comment draft',async t=>{
+ const page=await context(t);await page.goto(origin+'/#login');
+ await page.getByLabel('이메일',{exact:true}).fill('ui-viewer@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);await page.getByRole('button',{name:'로그인',exact:true}).click();
+ await page.getByRole('heading',{name:'화면검증 동료',exact:true}).waitFor();await page.goto(origin+'/#post/'+commentPostId);
+ const article=page.locator('[data-comment-id="'+commentId+'"]');await article.waitFor();
+ await article.getByRole('button',{name:'댓글 수정',exact:true}).click();
+ const field=article.getByLabel('댓글 수정 내용',{exact:true});assert.equal(await field.inputValue(),'화면검증 댓글 원문');
+ const edited='화면검증 수정 댓글 <b>문자 그대로</b>';
+ await field.fill(edited);
+ await page.locator('#comment').fill('아직 전송하지 않은 새 댓글');await page.getByRole('button',{name:'댓글 등록',exact:true}).click();
+ await page.locator('#comment-form [role=alert]').filter({hasText:'수정 중인 댓글'}).waitFor();
+ const pattern='**/api/comments/'+commentId;await page.route(pattern,route=>route.abort('failed'));
+ await article.getByRole('button',{name:'댓글 수정 저장',exact:true}).click();
+ await article.getByRole('alert').filter({hasText:'연결이 끊겼습니다.'}).waitFor();assert.equal(await field.inputValue(),edited);
+ await article.getByRole('button',{name:'취소',exact:true}).click();assert.equal(await article.locator('[data-comment-body]').innerText(),'화면검증 댓글 원문');await page.unroute(pattern);
+ await article.getByRole('button',{name:'댓글 수정',exact:true}).click();await article.getByLabel('댓글 수정 내용',{exact:true}).fill(edited);
+ const leaving=page.waitForEvent('dialog'),navigation=page.locator('.nav-write').click();const dialog=await leaving;assert.match(dialog.message(),/댓글 수정/);await dialog.dismiss();await navigation;await page.waitForURL(origin+'/#post/'+commentPostId);assert.equal(await article.getByLabel('댓글 수정 내용',{exact:true}).inputValue(),edited);
+ await article.getByRole('button',{name:'댓글 수정 저장',exact:true}).click();await article.locator('.comment-edit-form').waitFor({state:'detached'});
+ assert.equal(await article.locator('[data-comment-body]').innerText(),edited);assert.equal(await article.locator('[data-comment-body] b').count(),0);
+ assert.equal(await page.locator('#comment').inputValue(),'아직 전송하지 않은 새 댓글');assert.equal(await page.locator('#comment-form [role=alert]').isVisible(),false);assert.equal(await page.locator('[data-comment-id]').count(),1);
+ await article.getByRole('button',{name:'댓글 수정',exact:true}).click();
+ if(process.env.HIT_UI_SCREENSHOTS)await page.locator('#toast').waitFor({state:'hidden'});
+ for(const width of [320,390]){
+  await page.setViewportSize({width,height:844});const layout=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth}));assert.ok(layout.scroll<=layout.width,JSON.stringify(layout));
+  if(process.env.HIT_UI_SCREENSHOTS){mkdirSync(process.env.HIT_UI_SCREENSHOTS,{recursive:true});await article.screenshot({path:join(process.env.HIT_UI_SCREENSHOTS,`comment-edit-${width}.png`)});}
+ }
+ await article.getByRole('button',{name:'취소',exact:true}).click();
+ const guest=await context(t);await guest.goto(origin+'/#post/'+commentPostId);await guest.locator('[data-comment-id="'+commentId+'"]').waitFor();assert.equal(await guest.locator('[data-edit-comment]').count(),0);
+ await article.getByRole('button',{name:'댓글 수정',exact:true}).click();await article.getByLabel('댓글 수정 내용',{exact:true}).fill('화면검증 이동 후 저장 확인');
+ let held,arrived;const pendingRequest=new Promise(resolve=>arrived=resolve);await page.route(pattern,route=>{held=route;arrived();});
+ await article.getByRole('button',{name:'댓글 수정 저장',exact:true}).click();await pendingRequest;
+ const pendingDialog=page.waitForEvent('dialog'),moving=page.getByRole('link',{name:'조황 글쓰기',exact:true}).click();const warning=await pendingDialog;assert.match(warning.message(),/이동해도 수정이 반영/);await warning.accept();await moving;
+ await page.getByRole('heading',{name:'오늘의 조황 남기기',exact:true}).waitFor();await page.getByLabel('제목',{exact:true}).fill('화면검증 새 조황 작성 중');
+ const saved=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/comments/'+commentId&&r.request().method()==='PATCH');await held.continue();assert.equal((await saved).status(),200);
+ assert.equal(await page.getByLabel('제목',{exact:true}).inputValue(),'화면검증 새 조황 작성 중');
  assert.deepEqual(errors,[]);
 });

@@ -274,6 +274,15 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         }
       }
       const commentMatch = path.match(/^\/api\/comments\/(\d+)$/);
+      if(commentMatch&&method==='PATCH'){
+        auth();const comment=db.prepare('SELECT * FROM comments WHERE id=?').get(Number(commentMatch[1]));
+        if(!comment)fail(404,'댓글이 없습니다.');
+        if(comment.user_id!==user.id)fail(403,'본인의 댓글만 수정할 수 있습니다.');
+        if(comment.hidden||!mod.postVisible(db.prepare('SELECT * FROM posts WHERE id=?').get(comment.post_id),user))fail(404,'댓글이 없습니다.');
+        const content=text(body.body,300,'댓글');
+        db.prepare('UPDATE comments SET body=? WHERE id=?').run(content,comment.id);
+        return send(200,{id:comment.id,body:content});
+      }
       if (commentMatch && method === 'DELETE') {
         auth(); const comment = db.prepare('SELECT user_id FROM comments WHERE id=?').get(Number(commentMatch[1]));
         if (!comment) fail(404, '댓글이 없습니다.');

@@ -684,3 +684,39 @@ test('owned-post management stays scoped per account and kind with search, hidde
  const first=await query('community',a.cookie,{q:'관리 페이지'});assert.equal(first.body.posts.length,20);assert.ok(first.body.next);
  const last=await query('community',a.cookie,{q:'관리 페이지',before:String(first.body.next)});assert.equal(last.body.posts.length,1);assert.equal(last.body.next,null);assert.ok(!first.body.posts.some(p=>p.id===last.body.posts[0].id));
 });
+
+test('comment edits require the verified owner, preserve retry identity and never duplicate notifications',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'hit-comment-edit-')),database=join(dir,'hit.sqlite');let app=createApp({database});t.after(()=>{app.close();rmSync(dir,{recursive:true,force:true});});
+ const author=await request(app,'POST','/api/signup',credentials('edit-post-owner@example.test')),writer=await request(app,'POST','/api/signup',credentials('edit-comment-owner@example.test'));
+ const p=(await request(app,'POST','/api/posts',post,author.cookie)).body.post;
+ const requestId='cf'.repeat(16),created=await request(app,'POST','/api/posts/'+p.id+'/comments',{body:'원래 댓글',request_id:requestId},writer.cookie),id=created.body.id;
+ const path='/api/comments/'+id;
+ const comments=async()=>(await request(app,'GET','/api/posts/'+p.id+'/comments')).body.comments;
+ const original=(await comments())[0],notices=async()=>(await request(app,'GET','/api/notifications',undefined,author.cookie)).body;
+ const initial=await notices();assert.equal(initial.unread,1);
+ assert.equal((await request(app,'PATCH',path,{body:'수정'})).status,401);
+ assert.equal((await request(app,'PATCH',path,{body:'수정'},author.cookie)).status,403);
+ assert.equal((await request(app,'PATCH',path,{body:'수정'},writer.cookie,{origin:'https://wrong.example'})).status,403);
+ for(const body of ['', '   ', '가'.repeat(301),null,42])assert.equal((await request(app,'PATCH',path,{body},writer.cookie)).status,400);
+ const edited=await request(app,'PATCH',path,{body:'  수정한 댓글 <b>문자</b>  '},writer.cookie);assert.equal(edited.status,200);assert.equal(edited.body.id,id);assert.equal(edited.body.body,'수정한 댓글 <b>문자</b>');
+ const current=(await comments())[0];assert.equal(current.id,id);assert.equal(current.created_at,original.created_at);assert.equal(current.body,edited.body.body);
+ assert.equal((await request(app,'PATCH',path,{body:edited.body.body},writer.cookie)).status,200);
+ const replay=await request(app,'POST','/api/posts/'+p.id+'/comments',{body:'원래 댓글',request_id:requestId},writer.cookie);assert.equal(replay.body.id,id);assert.equal(replay.body.replayed,true);
+ assert.equal((await comments()).length,1);assert.equal((await comments())[0].body,edited.body.body);
+ const final=await notices();assert.equal(final.unread,initial.unread);assert.equal(final.notifications.length,initial.notifications.length);
+ const db=new DatabaseSync(database);db.prepare('UPDATE comments SET hidden=1 WHERE id=?').run(id);assert.equal((await request(app,'PATCH',path,{body:'숨김'},writer.cookie)).status,404);db.prepare('UPDATE comments SET hidden=0 WHERE id=?').run(id);
+ db.prepare('UPDATE posts SET hidden=1 WHERE id=?').run(p.id);assert.equal((await request(app,'PATCH',path,{body:'숨김 글'},writer.cookie)).status,404);db.prepare('UPDATE posts SET hidden=0 WHERE id=?').run(p.id);db.close();
+ await request(app,'PUT','/api/blocks/'+author.body.user.id,{},writer.cookie);assert.equal((await request(app,'PATCH',path,{body:'차단'},writer.cookie)).status,404);await request(app,'DELETE','/api/blocks/'+author.body.user.id,{},writer.cookie);
+ for(const kind of ['community','market']){
+  const parent=(await request(app,'POST','/api/posts',{...post,kind,price:1000},author.cookie)).body.post;
+  const comment=(await request(app,'POST','/api/posts/'+parent.id+'/comments',{body:'다른 종류 댓글'},writer.cookie)).body;
+  assert.equal((await request(app,'PATCH','/api/comments/'+comment.id,{body:kind+' 수정'},writer.cookie)).status,200);
+ }
+ app.close();app=createAppBase({database});
+ assert.equal((await request(app,'PATCH',path,{body:'인증 전'},writer.cookie)).status,403);
+ const state=new DatabaseSync(database);state.prepare('UPDATE users SET email_verified=1 WHERE id=?').run(writer.body.user.id);
+ assert.equal((await request(app,'PATCH',path,{body:'인증 후'},writer.cookie)).status,200);
+ state.prepare('UPDATE users SET suspended=1 WHERE id=?').run(writer.body.user.id);assert.equal((await request(app,'PATCH',path,{body:'이용 제한'},writer.cookie)).status,403);
+ state.prepare('UPDATE users SET suspended=0 WHERE id=?').run(writer.body.user.id);state.close();
+ assert.equal((await request(app,'DELETE',path,{},writer.cookie)).status,200);assert.equal((await request(app,'PATCH',path,{body:'삭제 후'},writer.cookie)).status,404);
+});
