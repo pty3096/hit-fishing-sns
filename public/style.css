@@ -55,3 +55,7 @@ header{box-shadow:0 3px 18px #0a2e6d06;border-color:#dfeaf6}.head{max-width:1440
 
 .region-map-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}.region-map-tabs a{padding:9px 15px;border:1px solid #dceafa;border-radius:24px;background:white;min-height:44px;font-size:13px}.region-map-tabs a[aria-current=page]{background:#0a2e6d;color:white}.map-panel .section-head{margin-top:0}.map-panel h2{font-size:19px}.map-slot{min-height:330px;background:#edf8ff;border:1px solid #cce7f5;border-radius:12px;display:grid;place-items:center;overflow:hidden}.map-slot>div{max-width:380px;text-align:center;padding:20px}.map-slot iframe{width:100%;height:380px;border:0;display:block}.map-credit a{color:#086db3;text-decoration:underline}.map-credit{margin-top:12px}.map-panel .section-head{flex-wrap:wrap}
 @media(max-width:650px){.map-slot{min-height:280px}.map-slot iframe{height:320px}.region-map-tabs{gap:6px}.region-map-tabs a{font-size:12px;padding:9px 13px}.map-panel .tag{font-size:10px}}
+
+.app-icon-preview{border:1px solid #dce8f4;border-radius:22px;box-shadow:0 5px 18px #0a2e6d10}.install-guide ol{padding-left:24px;line-height:1.9}.install-guide li{padding:6px 0}.connection-status{background:#fff0c7;color:#593f00;padding:12px 18px;font-size:13px;border-bottom:1px solid #e8d39d}.connection-status[hidden]{display:none}#install-state{font-size:13px;background:#edf8ff;border-radius:10px;padding:12px}.head{padding-top:max(6px,env(safe-area-inset-top))}
+
+.home-install-link{display:block;text-align:right;color:#0875bf;font-size:12px;min-height:44px;padding:12px 0}

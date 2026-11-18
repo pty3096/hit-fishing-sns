@@ -538,3 +538,12 @@ test('region map module is served with a narrow external-frame policy and existi
   assert.match(response.headers['content-security-policy'],/frame-ancestors 'none';/);
   assert.equal((await request(app,'GET','/region-map.mjs/../private')).status,404);
 });
+
+test('home-screen resources are public, correctly typed and keep security headers',async t=>{
+  const app=createApp({database:':memory:'});t.after(app.close);
+  for(const [path,type] of [['/manifest.webmanifest','application/manifest+json'],['/install.mjs','text/javascript'],['/sw.js','text/javascript']]){
+    const r=await request(app,'GET',path);assert.equal(r.status,200);assert.ok(r.headers['content-type'].startsWith(type));assert.equal(r.headers['cache-control'],'no-store');assert.match(r.headers['content-security-policy'],/script-src 'self'/);
+  }
+  const icon=await request(app,'GET','/assets/icon-180.png');assert.equal(icon.status,200);assert.equal(icon.headers['content-type'],'image/png');assert.equal((await sharp(icon.body).metadata()).width,180);
+  assert.equal((await request(app,'GET','/assets/icon-999.png')).status,404);
+});

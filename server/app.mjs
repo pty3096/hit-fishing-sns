@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {appIcon} from './app-icons.mjs';
 import {notifications} from './notifications.mjs';
 import {isIP} from 'node:net';
 import {emailAuth} from './email-auth.mjs';
@@ -78,6 +79,10 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
       if(path==='/api/meta'&&method==='GET')return send(200,{development_mail:!!mail.localMailbox,verification_required:requireVerified,production});
       if (!path.startsWith('/api/')) {
         if (method !== 'GET') fail(405, '지원하지 않는 요청입니다.');
+        const iconSize={'/assets/icon-180.png':180,'/assets/icon-192.png':192,'/assets/icon-512.png':512}[path];
+        if(iconSize){res.setHeader('Content-Type','image/png');res.end(await appIcon(iconSize));return;}
+        const installFile={'/install.mjs':['install.mjs','text/javascript'],'/sw.js':['sw.js','text/javascript'],'/manifest.webmanifest':['manifest.webmanifest','application/manifest+json']}[path];
+        if(installFile){res.setHeader('Content-Type',installFile[1]+'; charset=utf-8');res.end(readFileSync(resolve(root,'public',installFile[0])));return;}
         const file = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/ui.mjs': ['ui.mjs','text/javascript'], '/region-map.mjs':['region-map.mjs','text/javascript'], '/drafts.mjs':['drafts.mjs','text/javascript'], '/assets/approved-ui-v1.1.jpg':['assets/approved-ui-v1.1.jpg','image/jpeg'], '/style.css': ['style.css', 'text/css'] }[path];
         if (!file) fail(404, '페이지가 없습니다.');
         res.setHeader('Content-Type', `${file[1]}; charset=utf-8`);
