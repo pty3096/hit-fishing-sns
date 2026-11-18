@@ -13,6 +13,8 @@ Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 
 
 ## 자료
 
+- [장터 상품명·설명·가격 검색](docs/29_MARKET_SEARCH.md)
+
 - [아이폰 홈 화면 설치·연결 안내](docs/28_HOME_SCREEN.md)
 
 - [지역별 낚시지도·외부 지도 연결 범위](docs/27_REGION_MAP.md)

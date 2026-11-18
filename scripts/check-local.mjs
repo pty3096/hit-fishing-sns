@@ -16,7 +16,7 @@ export async function checkLocal(base='http://127.0.0.1:3000') {
   await check('개발 메일함·인증 필수 설정','/api/meta',async r=>{const m=await r.json();return r.status===200&&m.development_mail===true&&m.verification_required===true&&m.production===false;});
   await check('로그인하지 않은 방문자 상태','/api/me',async r=>r.status===200&&(await r.json()).user===null);
   await check('개발 메일함의 비로그인 접근 제한','/api/dev/mail',async r=>r.status===401);
-  for(const [path,type] of [['/','text/html'],['/app.js','text/javascript'],['/ui.mjs','text/javascript'],['/drafts.mjs','text/javascript'],['/region-map.mjs','text/javascript'],['/install.mjs','text/javascript'],['/sw.js','text/javascript'],['/manifest.webmanifest','application/manifest+json'],['/style.css','text/css']]) {
+  for(const [path,type] of [['/','text/html'],['/app.js','text/javascript'],['/ui.mjs','text/javascript'],['/drafts.mjs','text/javascript'],['/region-map.mjs','text/javascript'],['/market-search.mjs','text/javascript'],['/install.mjs','text/javascript'],['/sw.js','text/javascript'],['/manifest.webmanifest','application/manifest+json'],['/style.css','text/css']]) {
     await check(`화면 파일 ${path}`,path,async r=>r.status===200&&(r.headers.get('content-type')||'').startsWith(type)&&(await r.text()).length>0);
   }
   await check('브라우저 보안 헤더','/',async r=>r.headers.get('x-content-type-options')==='nosniff'&&r.headers.get('cache-control')==='no-store'&&(r.headers.get('content-security-policy')||'').includes("frame-ancestors 'none'"));

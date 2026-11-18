@@ -547,3 +547,37 @@ test('home-screen resources are public, correctly typed and keep security header
   const icon=await request(app,'GET','/assets/icon-180.png');assert.equal(icon.status,200);assert.equal(icon.headers['content-type'],'image/png');assert.equal((await sharp(icon.body).metadata()).width,180);
   assert.equal((await request(app,'GET','/assets/icon-999.png')).status,404);
 });
+
+test('market search combines literal keywords, inclusive price bounds and visibility without leaking other post kinds',async t=>{
+  const app=createApp({database:':memory:'});t.after(app.close);
+  const seller=await request(app,'POST','/api/signup',credentials('search-seller@example.test'));
+  const buyer=await request(app,'POST','/api/signup',credentials('search-buyer@example.test'));
+  const base={...post,kind:'market',title:'검증용 릴',body:'파란 가방과 함께 사용합니다.',price:15000,trade_status:'selling'};
+  const a=(await request(app,'POST','/api/posts',base,seller.cookie)).body.post;
+  const b=(await request(app,'POST','/api/posts',{...base,title:'나눔 가방',body:'검증 설명',price:0,trade_status:'sold'},seller.cookie)).body.post;
+  const c=(await request(app,'POST','/api/posts',{...base,title:'특수 50%_\\ 릴',price:30000,region:'부산'},buyer.cookie)).body.post;
+  await request(app,'POST','/api/posts',{...post,title:'검증용 릴'},seller.cookie);
+  await request(app,'POST','/api/posts',{kind:'community',title:'검증용 릴',body:'가방'},seller.cookie);
+  const query=async(fields={},cookie)=>request(app,'GET','/api/posts?'+new URLSearchParams({kind:'market',...fields}),undefined,cookie);
+  const ids=response=>response.body.posts.map(p=>p.id);
+  assert.deepEqual(ids(await query({q:'검증용 릴'})),[a.id]);
+  assert.deepEqual(ids(await query({q:'파란 가방'})),[c.id,a.id]);
+  assert.deepEqual(ids(await query({q:'50%_\\'})),[c.id]);
+  assert.deepEqual(ids(await query({q:'missing%'})),[]);
+  assert.deepEqual(ids(await query({q:"%' OR 1=1 --"})),[]);
+  assert.deepEqual(ids(await query({min_price:'15000',max_price:'15000'})),[a.id]);
+  assert.deepEqual(ids(await query({max_price:'0'})),[b.id]);
+  assert.deepEqual(ids(await query({min_price:'15001'})),[c.id]);
+  assert.deepEqual(ids(await query({q:'가방',region:'강릉',trade_status:'selling',min_price:'10000',max_price:'20000',author:String(seller.body.user.id)})),[a.id]);
+  for(const fields of [{min_price:'-1'},{max_price:'1.5'},{min_price:'1e3'},{max_price:'1000000001'},{min_price:'16000',max_price:'15000'},{q:'가'.repeat(81)}])assert.equal((await query(fields)).status,400);
+  assert.equal((await request(app,'GET','/api/posts?q=릴')).status,400);
+  assert.equal((await request(app,'GET','/api/posts?kind=community&max_price=0')).status,400);
+  await request(app,'PUT','/api/posts/'+a.id+'/save',{},buyer.cookie);
+  assert.deepEqual(ids(await query({q:'릴',saved:'1'},buyer.cookie)),[a.id]);
+  assert.equal((await request(app,'PUT','/api/blocks/'+seller.body.user.id,{},buyer.cookie)).status,200);
+  assert.deepEqual(ids(await query({q:'검증용 릴'},buyer.cookie)),[]);
+  assert.deepEqual(ids(await query({q:'릴',saved:'1'},buyer.cookie)),[]);
+  for(let i=0;i<21;i++)await request(app,'POST','/api/posts',{...base,title:'페이지 검증 릴',price:1234},seller.cookie);
+  const first=await query({q:'페이지 검증',max_price:'1234'});assert.equal(first.body.posts.length,20);assert.ok(first.body.next);
+  const last=await query({q:'페이지 검증',max_price:'1234',before:String(first.body.next)});assert.equal(last.body.posts.length,1);assert.equal(last.body.next,null);assert.ok(!ids(first).includes(last.body.posts[0].id));
+});

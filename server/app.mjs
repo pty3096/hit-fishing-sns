@@ -1,3 +1,4 @@
+import {marketSearchError,marketFilters} from '../public/market-search.mjs';
 import http from 'node:http';
 import {appIcon} from './app-icons.mjs';
 import {notifications} from './notifications.mjs';
@@ -83,7 +84,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if(iconSize){res.setHeader('Content-Type','image/png');res.end(await appIcon(iconSize));return;}
         const installFile={'/install.mjs':['install.mjs','text/javascript'],'/sw.js':['sw.js','text/javascript'],'/manifest.webmanifest':['manifest.webmanifest','application/manifest+json']}[path];
         if(installFile){res.setHeader('Content-Type',installFile[1]+'; charset=utf-8');res.end(readFileSync(resolve(root,'public',installFile[0])));return;}
-        const file = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/ui.mjs': ['ui.mjs','text/javascript'], '/region-map.mjs':['region-map.mjs','text/javascript'], '/drafts.mjs':['drafts.mjs','text/javascript'], '/assets/approved-ui-v1.1.jpg':['assets/approved-ui-v1.1.jpg','image/jpeg'], '/style.css': ['style.css', 'text/css'] }[path];
+        const file = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/ui.mjs': ['ui.mjs','text/javascript'], '/region-map.mjs':['region-map.mjs','text/javascript'], '/market-search.mjs':['market-search.mjs','text/javascript'], '/drafts.mjs':['drafts.mjs','text/javascript'], '/assets/approved-ui-v1.1.jpg':['assets/approved-ui-v1.1.jpg','image/jpeg'], '/style.css': ['style.css', 'text/css'] }[path];
         if (!file) fail(404, '페이지가 없습니다.');
         res.setHeader('Content-Type', `${file[1]}; charset=utf-8`);
         res.end(readFileSync(resolve(root, 'public', file[0]))); return;
@@ -277,6 +278,12 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if (url.searchParams.get('mine') === '1') { auth(); clauses.push('p.user_id=?'); values.push(user.id); }
         if (url.searchParams.get('following') === '1') { auth(); clauses.push('p.user_id IN (SELECT target_id FROM follows WHERE follower_id=?)'); values.push(user.id); }
         if(url.searchParams.get('saved')==='1'){auth();clauses.push('p.id IN (SELECT post_id FROM saved_posts WHERE user_id=?)');values.push(user.id);}
+        const marketSearch=marketFilters(url.searchParams),searchError=marketSearchError(marketSearch);
+        if(searchError)fail(400,searchError);
+        if(['q','min_price','max_price'].some(key=>marketSearch[key])&&kind!=='market')fail(400,'상품 검색은 장터에서 이용해주세요.');
+        if(marketSearch.q){const pattern='%'+marketSearch.q.replace(/[\\%_]/g,'\\$&')+'%';clauses.push("(p.title LIKE ? ESCAPE '\\' OR p.body LIKE ? ESCAPE '\\')");values.push(pattern,pattern);}
+        if(marketSearch.min_price){clauses.push('p.price>=?');values.push(Number(marketSearch.min_price));}
+        if(marketSearch.max_price){clauses.push('p.price<=?');values.push(Number(marketSearch.max_price));}
         const tradeStatus=url.searchParams.get('trade_status');
         if(tradeStatus){if(kind!=='market'||!['selling','sold'].includes(tradeStatus))fail(400,'거래 상태를 확인해주세요.');clauses.push('p.trade_status=?');values.push(tradeStatus);}
         const author = Number(url.searchParams.get('author')); if (author > 0) { clauses.push('p.user_id=?'); values.push(author); }
