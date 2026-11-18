@@ -57,3 +57,14 @@ test('nickname search links preserve literal Korean queries and clear without ex
  assert.equal(peoplePath('   '),'#people');assert.equal(peoplePath('친구',true),'/users?q='+encodeURIComponent('친구'));
  assert.equal(navigationSection('people'),'people');
 });
+
+test('post keyword links preserve literal text with catch filters and community author tabs',async()=>{
+ const {communityPath,searchValidation}=await import('../public/ui.mjs');
+ const fields={q:' 100%_\\ & 채비? ',fish:'농어',region:'강릉',method:'루어',date_from:'2026-11-17'};
+ const path=searchPath(new URLSearchParams(fields));assert.equal(new URL(path,'https://hit.example.test').searchParams.get('q'),fields.q.trim());
+ assert.equal(searchValidation({q:'가'.repeat(80)}),'');assert.match(searchValidation({q:'가'.repeat(81)}),/80자/);
+ const parsed=parseRoute(communityPath(fields.q,12));assert.equal(parsed.route,'community');assert.equal(parsed.params.get('q'),fields.q.trim());assert.equal(parsed.params.get('author'),'12');
+ assert.equal(parseRoute(communityPath(fields.q)).params.get('author'),null);
+ assert.equal(parseRoute(communityPath('',12)).params.get('q'),null);
+ const api=new URL(communityPath(fields.q,12,true),'https://hit.example.test');assert.equal(api.searchParams.get('kind'),'community');assert.equal(api.searchParams.get('q'),fields.q.trim());
+});

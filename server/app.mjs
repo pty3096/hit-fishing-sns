@@ -290,7 +290,7 @@ export function createApp({ database = resolve(root, 'data/hit.sqlite'), origin 
         if(url.searchParams.get('saved')==='1'){auth();clauses.push('p.id IN (SELECT post_id FROM saved_posts WHERE user_id=?)');values.push(user.id);}
         const marketSearch=marketFilters(url.searchParams),searchError=marketSearchError(marketSearch);
         if(searchError)fail(400,searchError);
-        if(['q','min_price','max_price'].some(key=>marketSearch[key])&&kind!=='market')fail(400,'상품 검색은 장터에서 이용해주세요.');
+        if(['min_price','max_price'].some(key=>marketSearch[key])&&kind!=='market')fail(400,'가격 조건은 장터에서만 이용해주세요.');
         if(marketSearch.q){const pattern='%'+marketSearch.q.replace(/[\\%_]/g,'\\$&')+'%';clauses.push("(p.title LIKE ? ESCAPE '\\' OR p.body LIKE ? ESCAPE '\\')");values.push(pattern,pattern);}
         if(marketSearch.min_price){clauses.push('p.price>=?');values.push(Number(marketSearch.min_price));}
         if(marketSearch.max_price){clauses.push('p.price<=?');values.push(Number(marketSearch.max_price));}

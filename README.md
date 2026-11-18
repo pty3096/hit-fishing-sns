@@ -13,6 +13,8 @@ Node.js 24에서 최초 한 번 `npm ci`로 필요한 패키지를 설치하고 
 
 ## 자료
 
+- [조황·커뮤니티 제목·본문 검색](docs/32_POST_KEYWORDS.md)
+
 - [브라우저 화면 검사·낚시인 찾기 검증](docs/31_BROWSER_QA.md)
 
 - [낚시인 닉네임 검색·공개 범위](docs/30_PEOPLE_SEARCH.md)

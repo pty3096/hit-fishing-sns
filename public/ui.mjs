@@ -4,7 +4,7 @@ export function parseRoute(hash='') {
 }
 export function searchPath(params) {
   const query=new URLSearchParams();
-  for(const key of ['fish','region','method','date_from','date_to']){const value=(params.get(key)||'').trim();if(value)query.set(key,value);}
+  for(const key of ['q','fish','region','method','date_from','date_to']){const value=(params.get(key)||'').trim();if(value)query.set(key,value);}
   return '/posts'+(query.size?'?'+query:'');
 }
 export function navigationSection(route) {
@@ -25,6 +25,7 @@ export function emptyMessage(kind='home') {
   return ({
     map:{title:'이 지역의 조황이 아직 없어요.',body:'다른 지역을 고르거나 조황을 남겨보세요.',href:'#write',label:'조황 남기기 →'},
     market:{title:'조건에 맞는 상품 글이 없어요.',body:'거래 지역이나 판매 상태를 바꿔보세요.',href:'#market',label:'전체 상품 글 보기 →'},
+    'community-search':{title:'조건에 맞는 이야기가 없어요.',body:'검색어를 바꾸거나 검색 조건을 지워보세요.',href:'#community',label:'전체 이야기 보기 →'},
     community:{title:'첫 이야기를 나눠보세요.',body:'낚시 질문이나 유용한 정보를 남겨주세요.',href:'#community-write',label:'커뮤니티 글쓰기 →'},
     home:{title:'아직 조황이 없어요.',body:'오늘의 첫 기록을 남겨볼까요?',href:'#write',label:'첫 조황 남기기 →'},
     search:{title:'조건에 맞는 조황이 없어요.',body:'어종이나 지역을 바꾸거나 검색 조건을 지워보세요.',href:'#search',label:'검색 조건 지우기 →'},
@@ -54,6 +55,7 @@ export function photoSelectionError(files,existing=0,max=5) {
 }
 
 export function searchValidation(fields) {
+  if((fields.q||'').trim().length>80)return '검색어는 80자 이내로 입력해주세요.';
   for(const key of ['date_from','date_to']){
     const value=fields[key]?.trim();
     if(value&&(!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value).toISOString().slice(0,10)!==value))return '출조 기간의 날짜를 확인해주세요.';
@@ -64,3 +66,5 @@ export function searchValidation(fields) {
 }
 
 export function peoplePath(query='',api=false){const q=query.trim();return (api?'/users':'#people')+(q?'?'+new URLSearchParams({q}):'');}
+
+export function communityPath(query='',author=null,api=false){const params=new URLSearchParams(api?{kind:'community'}:{});if(query.trim())params.set('q',query.trim());if(author)params.set('author',author);return (api?'/posts':'#community')+(params.size?'?'+params:'');}
