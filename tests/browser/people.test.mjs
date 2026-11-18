@@ -332,3 +332,20 @@ test('mobile authentication fits narrow screens and password visibility controls
  }
  assert.deepEqual(errors,[]);
 });
+
+test('avatar selection cancels safely, rejects a replacement without saving an older choice and retries failed uploads',async t=>{
+ const page=await context(t,{width:390,height:844});await page.goto(origin+'/#login');await page.getByLabel('이메일',{exact:true}).fill('ui-author@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);await page.getByRole('button',{name:'로그인',exact:true}).click();await page.getByRole('heading',{name:'화면검증 낚시인',exact:true}).waitFor();
+ await page.goto(origin+'/#profile-edit');await page.getByRole('heading',{name:'나를 소개해요',exact:true}).waitFor();
+ const picker=page.locator('#avatar-file'),cancel=page.getByRole('button',{name:'사진 선택 취소',exact:true});
+ const png=await sharp({create:{width:24,height:24,channels:3,background:'#0d8dff'}}).png().toBuffer(),file={name:'fixture.png',mimeType:'image/png',buffer:png};
+ await picker.setInputFiles(file);await cancel.waitFor();assert.ok((await page.locator('#avatar-preview img').getAttribute('src')).startsWith('blob:'));
+ await cancel.click();assert.equal(await page.locator('#avatar-preview img').count(),0);assert.equal(await picker.getAttribute('required'),'');await cancel.waitFor({state:'hidden'});
+ await picker.setInputFiles(file);await picker.setInputFiles({name:'fixture.heic',mimeType:'image/heic',buffer:Buffer.from('not a real photo')});await page.locator('#avatar-error').filter({hasText:'HEIC'}).waitFor();assert.equal(await picker.getAttribute('aria-invalid'),'true');assert.equal(await page.locator('#avatar-preview img').count(),0);await cancel.waitFor({state:'hidden'});assert.equal(await picker.evaluate(el=>el.files.length),0);
+ await picker.setInputFiles(file);assert.equal(await picker.getAttribute('aria-invalid'),null);
+ let failed=false;await page.route('**/api/profile/photo',async route=>{if(route.request().method()==='PUT'&&!failed){failed=true;return route.abort('failed');}return route.continue();});
+ await page.getByRole('button',{name:'사진 저장',exact:true}).click();await page.locator('#avatar-status').filter({hasText:'사진을 저장하지 못했습니다.'}).waitFor();assert.equal(await cancel.isEnabled(),true);assert.ok((await page.locator('#avatar-preview img').getAttribute('src')).startsWith('blob:'));
+ await page.getByRole('button',{name:'사진 저장',exact:true}).click();await page.locator('#avatar-preview img[src^="/api/"]').waitFor();await cancel.waitFor({state:'hidden'});const saved=await page.locator('#avatar-preview img').getAttribute('src');
+ await picker.setInputFiles(file);await cancel.click();assert.equal(await page.locator('#avatar-preview img').getAttribute('src'),saved);
+ for(const width of [320,390]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
+ assert.deepEqual(errors,[]);
+});
