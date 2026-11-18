@@ -32,6 +32,10 @@ function guardWrite(route) {
 function replaceAuthRoute(route){history.replaceState(null,'',location.pathname+location.search+'#'+route);activeHash=location.hash;render({focus:true});}
 function formAction(id, action) {
   const form = document.getElementById(id);if(!form)return;
+  if(['auth','reset-form'].includes(id))form.querySelectorAll('input[type=password]').forEach(input=>{
+    const toggle=document.createElement('button');toggle.type='button';toggle.className='password-toggle';toggle.textContent='비밀번호 보기';toggle.setAttribute('aria-controls',input.id);toggle.setAttribute('aria-pressed','false');toggle.setAttribute('aria-label',input.autocomplete==='current-password'?'로그인 비밀번호 표시':input.name==='confirm'?'확인 비밀번호 표시':'비밀번호 표시');
+    toggle.onclick=()=>{const visible=input.type==='password';input.type=visible?'text':'password';toggle.textContent=visible?'비밀번호 숨기기':'비밀번호 보기';toggle.setAttribute('aria-pressed',String(visible));};input.after(toggle);
+  });
   const formRoute=location.hash;
   form.onsubmit = async event => {
     event.preventDefault(); const button = form.querySelector('button[type=submit]');

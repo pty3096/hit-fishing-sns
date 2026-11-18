@@ -310,3 +310,25 @@ test('verification response recovery removes the used token and offers the prese
  await page.getByRole('button',{name:'이메일 인증 완료하기',exact:true}).click();await page.getByRole('heading',{name:'하던 작업을 계속할까요?',exact:true}).waitFor();assert.ok(!page.url().includes('verify/'));
  await page.getByRole('link',{name:'이어서 진행하기',exact:true}).click();await page.getByRole('heading',{name:'장터 상품 등록',exact:true}).waitFor();assert.deepEqual(errors,[]);
 });
+
+test('mobile authentication fits narrow screens and password visibility controls preserve values without submitting',async t=>{
+ for(const width of [320,390]){
+  const page=await context(t,{width,height:844});
+  for(const [route,heading] of [['login','다시 만나 반가워요.'],['signup','첫 기록을 시작해요.'],['forgot','비밀번호 찾기'],['verify/'+'b'.repeat(64),'이메일 인증'],['reset/'+'b'.repeat(64),'새 비밀번호 설정']]){
+   await page.goto(origin+'/#'+route);await page.getByRole('heading',{name:heading,exact:true}).waitFor();
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   for(const input of await page.locator('main input').all())assert.ok(Number(await input.evaluate(el=>parseFloat(getComputedStyle(el).fontSize)))>=16);
+   const controls=page.locator('.password-toggle');
+   for(let i=0;i<await controls.count();i++){
+    const button=controls.nth(i),target=await button.getAttribute('aria-controls'),input=page.locator('#'+target);await input.fill('Only-local-visible-12345');
+    assert.equal(await input.getAttribute('type'),'password');assert.ok((await button.boundingBox()).height>=44);
+    await button.click();assert.equal(await input.getAttribute('type'),'text');assert.equal(await button.getAttribute('aria-pressed'),'true');assert.equal(await input.inputValue(),'Only-local-visible-12345');assert.ok(page.url().endsWith('#'+route));
+    await button.press('Space');assert.equal(await input.getAttribute('type'),'password');assert.equal(await button.getAttribute('aria-pressed'),'false');
+   }
+   if(route.startsWith('reset/')){
+    await page.getByLabel('새 비밀번호 확인',{exact:true}).fill('different-confirmation-12345');await page.getByRole('button',{name:'비밀번호 변경',exact:true}).click();await page.getByRole('alert').filter({hasText:'두 비밀번호가 일치하지 않습니다.'}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   }
+  }
+ }
+ assert.deepEqual(errors,[]);
+});
