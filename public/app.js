@@ -1,3 +1,4 @@
+import {createApiClient} from './api.mjs';
 import {authReturnStore} from './auth-return.mjs';
 import {marketSearchError,marketFilters,marketPath} from './market-search.mjs';
 import {mapRegions,regionMapView,regionMapPath} from './region-map.mjs';
@@ -15,12 +16,7 @@ let previewUrls = [];
 const cleanupPreviews = () => { previewUrls.forEach(url => URL.revokeObjectURL(url)); previewUrls = []; };
 const fileBase64 = file => new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = () => reject(new Error('사진을 읽을 수 없습니다.')); reader.readAsDataURL(file); });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-async function api(path, method = 'GET', data) {
-  let response;try{response=await fetch('/api' + path, { method, headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined });}catch{throw Object.assign(new Error('연결이 끊겼습니다. 인터넷 연결을 확인하고 다시 시도해주세요.'),{code:'connection'});}
-  let result;try{result=await response.json();}catch{throw Object.assign(new Error('서버 응답을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'),{code:'response'});}
-  if (!response.ok) throw new Error(result.error || '요청을 처리하지 못했습니다.');
-  return result;
-}
+const api=createApiClient();
 let toastTimer;
 function toast(message) { clearTimeout(toastTimer);const t = document.querySelector('#toast'); t.textContent = message; t.hidden = false; toastTimer=setTimeout(() => { t.hidden = true; }, 4500); }
 function guard(route) { if (me) return true; authReturn.write(route); location.hash = 'login'; return false; }
@@ -382,7 +378,7 @@ async function render({focus=false}={}) {
     } else throw new Error('없는 화면입니다. 홈으로 이동해주세요.');
   } catch (e) {
     if (current !== generation) return;
-    const previewConnection=(meta.phone_preview||location.hostname.endsWith('.trycloudflare.com'))&&['connection','response'].includes(e.code);
+    const previewConnection=(meta.phone_preview||location.hostname.endsWith('.trycloudflare.com'))&&['connection','response','timeout'].includes(e.code);
     main.innerHTML = `<section class="card"><h2>잠시 확인이 필요해요</h2><p class="error" role="alert">${esc(e.message)}</p>${previewConnection?'<p class="field-help">시범 접속 인증이 만료됐거나 통신이 끊겼을 수 있습니다. 앱 안의 브라우저라면 Safari에서 열어주세요. 접속 다시 확인을 누르면 페이지를 새로 열어 이메일 인증이 필요한지 확인할 수 있습니다. PC와 시범 서버도 켜져 있어야 합니다.</p><button id="reconnect" type="button">접속 다시 확인</button>':''}<button id="retry">다시 시도</button> ${route==='search'?'<a href="#search" class="back">검색 조건 초기화</a>':''} <a href="#home">홈으로</a></section>`;
     document.querySelector('#retry').onclick=()=>render({focus:true});
     const reconnect=document.querySelector('#reconnect');if(reconnect)reconnect.onclick=()=>location.reload();
