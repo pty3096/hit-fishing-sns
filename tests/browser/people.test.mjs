@@ -378,3 +378,12 @@ test('photo ordering changes the cover and persists new and existing photo order
  const patch=page.waitForRequest(request=>request.url().includes('/api/posts/')&&request.method()==='PATCH');await page.getByRole('button',{name:'수정 저장',exact:true}).click();assert.deepEqual((await patch).postDataJSON().photos,originals.reverse().map(id=>({id})));await page.getByRole('heading',{name:'사진순서 화면검증 글',exact:true}).waitFor();await page.reload();await page.getByRole('heading',{name:'사진순서 화면검증 글',exact:true}).waitFor();
  const changed=await page.locator('.gallery img').first().getAttribute('src'),red=await sharp(await (await page.request.get(origin+changed)).body()).stats();assert.ok(red.channels[0].mean>red.channels[2].mean);assert.deepEqual(errors,[]);
 });
+
+test('preview connection failures offer explicit top-level reconnect without mistaking application errors for authentication',async t=>{
+ const page=await context(t,{width:390,height:844});await page.route('**/api/meta',async route=>{const response=await route.fetch();return route.fulfill({response,json:{...await response.json(),phone_preview:true}});});
+ let failure='network';await page.route('**/api/posts',route=>{if(failure==='network')return route.abort('failed');if(failure==='html')return route.fulfill({status:200,contentType:'text/html',body:'<html>access login</html>'});if(failure==='permission')return route.fulfill({status:403,contentType:'application/json',body:JSON.stringify({error:'화면 검증용 접근 제한입니다.'})});return route.continue();});
+ await page.goto(origin+'/#feed');await page.getByRole('button',{name:'접속 다시 확인',exact:true}).waitFor();await page.getByText(/시범 접속 인증이 만료됐거나/).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ failure='';await Promise.all([page.waitForEvent('load'),page.getByRole('button',{name:'접속 다시 확인',exact:true}).click()]);await page.locator('#posts .post-title').first().waitFor();assert.equal(await page.locator('#reconnect').count(),0);
+ failure='html';await page.reload();await page.getByRole('button',{name:'접속 다시 확인',exact:true}).waitFor();await page.getByRole('alert').filter({hasText:'서버 응답을 확인하지 못했습니다.'}).waitFor();
+ failure='permission';await page.getByRole('button',{name:'다시 시도',exact:true}).click();await page.getByRole('alert').filter({hasText:'화면 검증용 접근 제한입니다.'}).waitFor();assert.equal(await page.locator('#reconnect').count(),0);assert.deepEqual(errors,[]);
+});
