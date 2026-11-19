@@ -79,3 +79,5 @@ header{box-shadow:0 3px 18px #0a2e6d06;border-color:#dfeaf6}.head{max-width:1440
 @media(max-width:650px){#auth input,#forgot-form input,#reset-form input{font-size:16px;min-width:0}#auth,#forgot-form,#reset-form{min-width:0}#auth~p a{display:inline-flex;align-items:center;min-height:44px}#verify-form p,#reset-form p,#forgot-form p{overflow-wrap:anywhere}}
 
 .photo-order{display:flex;gap:6px;margin-bottom:5px}.photo-preview button{min-height:44px}.photo-order button{flex:1;min-width:0}.photo-order button:disabled{opacity:.4;cursor:default}.photo-preview>div:focus{outline:3px solid #58b6f3;outline-offset:3px;border-radius:10px}
+
+.session-recovery{border:1px solid #cce6f7;background:#f2faff;padding:14px;border-radius:12px;margin-top:12px}.session-recovery .back{display:inline-flex;align-items:center;min-height:44px;padding:10px 14px;margin:8px 0 0;white-space:normal}.session-recovery p{overflow-wrap:anywhere}

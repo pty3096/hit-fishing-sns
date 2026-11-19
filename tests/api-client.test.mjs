@@ -20,3 +20,6 @@ test('API client serializes once, clears completed timers and classifies ordinar
  assert.deepEqual(await client('/fixture','POST',{title:'fixture'}),{saved:true});assert.deepEqual(JSON.parse(body),{title:'fixture'});await new Promise(resolve=>setTimeout(resolve,25));assert.equal(signal.aborted,false);
  const offline=createApiClient({fetcher:async()=>{throw Error('offline');}});await assert.rejects(offline('/fixture'),{code:'connection'});
 });
+test('API client exposes HTTP status for login recovery without classifying permission errors as connectivity failures',async()=>{
+ for(const status of [401,403,429]){const client=createApiClient({fetcher:async()=>({ok:false,status,json:async()=>({error:'서버 안내'})})});await assert.rejects(client('/fixture','POST',{}),error=>error.status===status&&!error.code&&error.message==='서버 안내');}
+});

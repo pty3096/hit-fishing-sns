@@ -26,6 +26,12 @@ function guardWrite(route) {
   return true;
 }
 function replaceAuthRoute(route){history.replaceState(null,'',location.pathname+location.search+'#'+route);activeHash=location.hash;render({focus:true});}
+function loginRecovery(error,container,route,{post=false}={}){
+  if(error.status!==401||!me)return;
+  const box=document.createElement('div');box.dataset.sessionRecovery='';box.className='session-recovery';
+  const hint=document.createElement('p'),link=document.createElement('a');hint.className='field-help';hint.textContent=post?'로그인이 만료됐을 수 있습니다. 글은 이 탭에 임시 저장할 수 있지만 사진과 순서 변경은 저장되지 않습니다. 로그인 화면으로 이동하면 사진을 다시 선택해야 합니다.':'로그인이 만료됐을 수 있습니다. 다시 로그인한 뒤 이 화면으로 돌아올 수 있습니다. 저장하지 않은 입력은 다시 확인해주세요.';
+  link.className='primary back';link.href='#login';link.dataset.loginReturn=route;link.textContent='다시 로그인하고 이어가기';box.append(hint,link);container.append(box);
+}
 function formAction(id, action) {
   const form = document.getElementById(id);if(!form)return;
   if(['auth','reset-form'].includes(id))form.querySelectorAll('input[type=password]').forEach(input=>{
@@ -34,10 +40,10 @@ function formAction(id, action) {
   });
   const formRoute=location.hash;
   form.onsubmit = async event => {
-    event.preventDefault(); const button = form.querySelector('button[type=submit]');
+    event.preventDefault();form.querySelector('[data-session-recovery]')?.remove(); const button = form.querySelector('button[type=submit]');
     const error = form.querySelector('[role=alert]'); error.textContent = ''; error.hidden = true; button.disabled = true;const originalLabel=button.textContent;button.textContent='처리 중…';form.setAttribute('aria-busy','true');
     try { await action(Object.fromEntries(new FormData(form)),()=>form.isConnected&&location.hash===formRoute); }
-    catch (err) { if(form.isConnected&&location.hash===formRoute){error.textContent=err.message;error.hidden=false;error.tabIndex=-1;error.focus();} }
+    catch (err) { if(form.isConnected&&location.hash===formRoute){error.textContent=err.message;error.hidden=false;error.tabIndex=-1;error.focus();if(!['auth','forgot-form','reset-form','verify-form'].includes(id))loginRecovery(err,form,formRoute,{post:id==='post-form'});} }
     finally {button.disabled=false;button.textContent=originalLabel;form.removeAttribute('aria-busy');}
   };
 }
@@ -382,6 +388,7 @@ async function render({focus=false}={}) {
     main.innerHTML = `<section class="card"><h2>잠시 확인이 필요해요</h2><p class="error" role="alert">${esc(e.message)}</p>${previewConnection?'<p class="field-help">시범 접속 인증이 만료됐거나 통신이 끊겼을 수 있습니다. 앱 안의 브라우저라면 Safari에서 열어주세요. 접속 다시 확인을 누르면 페이지를 새로 열어 이메일 인증이 필요한지 확인할 수 있습니다. PC와 시범 서버도 켜져 있어야 합니다.</p><button id="reconnect" type="button">접속 다시 확인</button>':''}<button id="retry">다시 시도</button> ${route==='search'?'<a href="#search" class="back">검색 조건 초기화</a>':''} <a href="#home">홈으로</a></section>`;
     document.querySelector('#retry').onclick=()=>render({focus:true});
     const reconnect=document.querySelector('#reconnect');if(reconnect)reconnect.onclick=()=>location.reload();
+    loginRecovery(e,main.querySelector('.card'),location.hash);
   }finally{if(current===generation){main.removeAttribute('aria-busy');if(focus)main.focus({preventScroll:true});}}
 }
 async function loadComments(postId, before, target = '#comments') {

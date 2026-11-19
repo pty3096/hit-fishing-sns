@@ -15,7 +15,7 @@ export function createApiClient({fetcher=(...args)=>fetch(...args),readTimeout=1
     throw Object.assign(new Error('서버 응답을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'),{code:'response'});
    }
    if(!result||typeof result!=='object'||Array.isArray(result))throw Object.assign(new Error('서버 응답을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'),{code:'response'});
-   if(!response.ok)throw new Error(typeof result.error==='string'?result.error:'요청을 처리하지 못했습니다.');
+   if(!response.ok)throw Object.assign(new Error(typeof result.error==='string'?result.error:'요청을 처리하지 못했습니다.'),{status:response.status});
    return result;
   }finally{clearTimeout(timer);}
  };

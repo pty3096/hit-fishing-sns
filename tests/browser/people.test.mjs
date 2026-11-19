@@ -387,3 +387,18 @@ test('preview connection failures offer explicit top-level reconnect without mis
  failure='html';await page.reload();await page.getByRole('button',{name:'접속 다시 확인',exact:true}).waitFor();await page.getByRole('alert').filter({hasText:'서버 응답을 확인하지 못했습니다.'}).waitFor();
  failure='permission';await page.getByRole('button',{name:'다시 시도',exact:true}).click();await page.getByRole('alert').filter({hasText:'화면 검증용 접근 제한입니다.'}).waitFor();assert.equal(await page.locator('#reconnect').count(),0);assert.deepEqual(errors,[]);
 });
+
+test('expired login keeps a post on screen and resumes its account-scoped text draft only after explicit login navigation',async t=>{
+ const page=await context(t,{width:390,height:844});await page.goto(origin+'/#login');await page.getByLabel('이메일',{exact:true}).fill('ui-author@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);await page.getByRole('button',{name:'로그인',exact:true}).click();await page.getByRole('heading',{name:'화면검증 낚시인',exact:true}).waitFor();
+ await page.goto(origin+'/#community-write');await page.getByRole('heading',{name:'커뮤니티 글쓰기',exact:true}).waitFor();await page.getByLabel('제목',{exact:true}).fill('로그인만료 화면검증 글');await page.getByLabel('이야기',{exact:true}).fill('실제 게시물이 아닌 세션 복귀 검증 자료입니다.');
+ const file={name:'fixture.png',mimeType:'image/png',buffer:await sharp({create:{width:24,height:24,channels:3,background:'#0d8dff'}}).png().toBuffer()};await page.locator('#photos').setInputFiles(file);
+ const logout=await page.request.post(origin+'/api/logout',{headers:{origin},data:{}});assert.equal(logout.status(),200);
+ await page.getByRole('button',{name:'글 등록',exact:true}).click();const recovery=page.getByRole('link',{name:'다시 로그인하고 이어가기',exact:true});await recovery.waitFor();assert.equal(await page.getByLabel('제목',{exact:true}).inputValue(),'로그인만료 화면검증 글');assert.equal(await page.locator('#photo-preview img').count(),1);assert.ok(page.url().endsWith('#community-write'));
+ const posts=await (await page.request.get(origin+'/api/posts?kind=community&q='+encodeURIComponent('로그인만료 화면검증 글'))).json();assert.equal(posts.posts.length,0);
+ for(const width of [320,390]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
+ page.once('dialog',dialog=>dialog.dismiss());await recovery.click();await page.waitForFunction(()=>location.hash==='#community-write');assert.ok(page.url().endsWith('#community-write'));assert.equal(await page.locator('#photo-preview img').count(),1);
+ page.once('dialog',dialog=>dialog.accept());await recovery.click();await page.getByRole('heading',{name:'다시 만나 반가워요.',exact:true}).waitFor();
+ await page.getByLabel('이메일',{exact:true}).fill('ui-author@example.test');await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill('Wrong-password-12345');await page.getByRole('button',{name:'로그인',exact:true}).click();await page.getByRole('alert').filter({hasText:'이메일 또는 비밀번호를 확인해주세요.'}).waitFor();assert.equal(await page.locator('[data-session-recovery]').count(),0);
+ await page.getByLabel('비밀번호 (12~128자)',{exact:true}).fill(password);await page.getByRole('button',{name:'로그인',exact:true}).click();await page.getByRole('heading',{name:'커뮤니티 글쓰기',exact:true}).waitFor();await page.getByRole('button',{name:'이어쓰기',exact:true}).click();assert.equal(await page.getByLabel('제목',{exact:true}).inputValue(),'로그인만료 화면검증 글');assert.equal(await page.locator('#photo-preview img').count(),0);
+ await page.locator('#photos').setInputFiles(file);await page.getByRole('button',{name:'글 등록',exact:true}).click();await page.getByRole('heading',{name:'로그인만료 화면검증 글',exact:true}).waitFor();assert.deepEqual(errors,[]);
+});
